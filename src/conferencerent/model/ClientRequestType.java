@@ -1,7 +1,7 @@
 package conferencerent.model;
 
 public enum ClientRequestType {
-    LIST,
+    LIST_BUILDINGS,
     BOOK,
     LIST_RESERVATIONS,
     CONFIRM,

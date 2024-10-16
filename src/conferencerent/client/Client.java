@@ -1,8 +1,10 @@
 package conferencerent.client;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
 import java.util.UUID;
+
 import com.rabbitmq.client.*;
 import conferencerent.model.ClientRequestMessage;
 import conferencerent.model.ClientRequestType;
@@ -12,6 +14,9 @@ public class Client {
     private static final String clientId = UUID.randomUUID().toString();
     private final static String EXCHANGE_CLIENT = "client_exchange";
     private static final String RESPONSE_QUEUE = "client_response_queue";
+    private static Channel channel;
+    private static final Object lock = new Object();
+    private static boolean responseReceived = false;
 
     public static void main(String[] args) throws Exception {
         new Client().run();
@@ -24,18 +29,43 @@ public class Client {
         factory.setPassword("guest");
         factory.setPort(5672);
         Connection connection = factory.newConnection();
-        Channel channel = connection.createChannel();
+        channel = connection.createChannel();
 
-        // Declare the exchange and the queue
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
+        channel.queueDeclare(RESPONSE_QUEUE, false, false, false, null);
 
-        startBooking(channel);
+        startResponseMonitor();
+        startBooking();
 
         channel.close();
         connection.close();
     }
 
-    private void startBooking(Channel channel) throws Exception {
+    private void startResponseMonitor() throws Exception {
+        channel.basicConsume(RESPONSE_QUEUE, true, (consumerTag, delivery) -> {
+            String response = new String(delivery.getBody(), StandardCharsets.UTF_8);
+
+            if (response.startsWith("Available Buildings")) {
+                processBuildingList(response);
+            } else if (response.startsWith("Your reservations")) {
+                try {
+                    processReservationList(response);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            } else if (response.startsWith("Booking confirmed")) {
+                System.out.println(response);
+            } else if (response.startsWith("Reservation cancelled")) {
+                System.out.println(response);
+            }
+            synchronized (lock) {
+                responseReceived = true;
+                lock.notify();
+            }
+        }, consumerTag -> {});
+    }
+
+    private void startBooking() throws Exception {
         boolean running = true;
         Scanner scanner = new Scanner(System.in);
         while (running) {
@@ -49,39 +79,34 @@ public class Client {
             scanner.nextLine();  // Consume newline
 
             switch (choice) {
-                case 1 -> requestListOfBuildings(channel);
-                case 2 -> requestListOfReservations(channel);
+                case 1 -> requestListOfBuildings();
+                case 2 -> requestListOfReservations();
                 case 3 -> {
                     running = false;
                     System.out.println("Exiting the system...");
                 }
                 default -> System.out.println("Invalid choice. Please try again.");
             }
+
+            synchronized (lock) {
+                while (!responseReceived) {
+                    lock.wait();
+                }
+                responseReceived = false;
+            }
         }
     }
 
-    private static void requestListOfBuildings(Channel channel) throws Exception {
-        ClientRequestMessage requestMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST);
-
+    private void requestListOfBuildings() throws Exception {
+        ClientRequestMessage requestMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_BUILDINGS);
         ObjectMapper objectMapper = new ObjectMapper();
         String message = objectMapper.writeValueAsString(requestMessage);
-
         channel.basicPublish(EXCHANGE_CLIENT, "", null, message.getBytes());
-
-        channel.basicConsume(RESPONSE_QUEUE, true, (consumerTag, delivery) -> {
-            String response = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            System.out.println("Available Buildings and Rooms: " + response);
-
-            try {
-                processBuildingList(channel, response);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }, consumerTag -> {});
     }
 
-    private static void processBuildingList(Channel channel, String response) throws Exception {
+    private void processBuildingList(String response) throws IOException {
         Scanner scanner = new Scanner(System.in);
+        System.out.println(response);
         System.out.println("1. Book a room");
         System.out.println("2. Exit");
         System.out.print("Choose an option: ");
@@ -102,84 +127,37 @@ public class Client {
 
             ObjectMapper objectMapper = new ObjectMapper();
             String message = objectMapper.writeValueAsString(bookingRequest);
-
             channel.basicPublish(EXCHANGE_CLIENT, "", null, message.getBytes());
-
-            channel.basicConsume(RESPONSE_QUEUE, true, (consumerTag, delivery) -> {
-                String bookingResponse = new String(delivery.getBody(), StandardCharsets.UTF_8);
-                System.out.println(bookingResponse);
-
-                if (bookingResponse.startsWith("Booking confirmed")) {
-                    System.out.print("Enter reservation number to confirm booking: ");
-                    String reservationNumber = scanner.nextLine();
-
-                    try {
-                        confirmBooking(channel, reservationNumber);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                }
-            }, consumerTag -> {});
         }
     }
-    private static void confirmBooking(Channel channel, String reservationNumber) throws Exception {
-        ClientRequestMessage confirmRequest = new ClientRequestMessage(clientId, ClientRequestType.CONFIRM);
-        confirmRequest.setReservationNumber(reservationNumber);
 
-        ObjectMapper objectMapper = new ObjectMapper();
-        String message = objectMapper.writeValueAsString(confirmRequest);
-
-        channel.basicPublish(EXCHANGE_CLIENT, "", null, message.getBytes());
-        System.out.println("Booking confirmed with reservation number: " + reservationNumber);
-    }
-
-    private static void requestListOfReservations(Channel channel) throws Exception {
-        // Create a request for the client's reservations
+    private void requestListOfReservations() throws Exception {
         ClientRequestMessage requestMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_RESERVATIONS);
-
         ObjectMapper objectMapper = new ObjectMapper();
         String message = objectMapper.writeValueAsString(requestMessage);
-
-        // Publish the request
         channel.basicPublish(EXCHANGE_CLIENT, "", null, message.getBytes());
-
-        // Wait for the agent's response with the reservations
-        channel.basicConsume(RESPONSE_QUEUE, true, (consumerTag, delivery) -> {
-            String reservations = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            System.out.println("Your reservations: " + reservations);
-
-            // Prompt for canceling a reservation
-            try {
-                processReservationCancellation(channel, reservations);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }, consumerTag -> {});
     }
 
-
-    private static void processReservationCancellation(Channel channel, String reservations) throws Exception {
+    private void processReservationList(String response) throws Exception {
         Scanner scanner = new Scanner(System.in);
+        System.out.println(response);
 
-        if (!reservations.isEmpty()) {
+        if (!response.isEmpty()) {
             System.out.println("Enter reservation number to cancel or press Enter to go back:");
             String reservationToCancel = scanner.nextLine();
 
             if (!reservationToCancel.isEmpty()) {
-                cancelReservation(channel, reservationToCancel);
+                cancelReservation(reservationToCancel);
             }
         }
     }
 
-    private static void cancelReservation(Channel channel, String reservationNumber) throws Exception {
-        // Create a cancellation request message
+    private void cancelReservation(String reservationNumber) throws Exception {
         ClientRequestMessage cancelRequest = new ClientRequestMessage(clientId, ClientRequestType.CANCEL);
         cancelRequest.setReservationNumber(reservationNumber);
 
         ObjectMapper objectMapper = new ObjectMapper();
         String message = objectMapper.writeValueAsString(cancelRequest);
-
-        // Publish the cancellation request
         channel.basicPublish(EXCHANGE_CLIENT, "", null, message.getBytes());
         System.out.println("Reservation " + reservationNumber + " has been cancelled.");
     }
