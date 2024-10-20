@@ -5,6 +5,7 @@ public enum ClientRequestType {
     BOOK,
     LIST_RESERVATIONS,
     CONFIRM,
-    CANCEL
+    CANCEL,
+    ERROR,
 }
 
