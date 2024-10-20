@@ -1,6 +1,7 @@
 package conferencerent.model;
 
-public enum ClientRequestType {
+public enum MessageType {
+    BUILDING_STATUS,
     LIST_BUILDINGS,
     BOOK,
     LIST_RESERVATIONS,

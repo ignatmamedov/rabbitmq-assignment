@@ -5,8 +5,8 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 
-import conferencerent.model.ClientRequestMessage;
-import conferencerent.model.ClientRequestType;
+import conferencerent.model.ClientMessage;
+import conferencerent.model.MessageType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -33,7 +33,7 @@ public class Client {
     private boolean isNewMessage = false;
     private boolean isNewMessageExpected;
 
-    ClientRequestMessage responseMessage = null;
+    ClientMessage responseMessage = null;
 
     public static void main(String[] args) throws Exception {
         new Client().run();
@@ -94,7 +94,7 @@ public class Client {
             String jsonResponse = new String(delivery.getBody(), StandardCharsets.UTF_8);
             lock.lock();
             try {
-                responseMessage = objectMapper.readValue(jsonResponse, ClientRequestMessage.class);
+                responseMessage = objectMapper.readValue(jsonResponse, ClientMessage.class);
                 isNewMessage = true;
                 newMessageReceived.signal();
             } finally {
@@ -134,7 +134,7 @@ public class Client {
         }
     }
 
-    private void processBuildingList(ClientRequestMessage response) {
+    private void processBuildingList(ClientMessage response) {
         Map<String, ArrayList<Integer>> buildings = response.getBuildings();
         System.out.println("Available Buildings and Rooms:");
         for (String building : buildings.keySet()) {
@@ -152,7 +152,7 @@ public class Client {
             List<Integer> rooms = getValidRooms(buildings.get(building), building);
 
             try {
-                ClientRequestMessage bookingRequest = new ClientRequestMessage(clientId, ClientRequestType.BOOK);
+                ClientMessage bookingRequest = new ClientMessage(clientId, MessageType.BOOK);
                 Map<String, ArrayList<Integer>> bookingRooms = new HashMap<>();
                 bookingRooms.put(building, new ArrayList<>(rooms));
                 bookingRequest.setBuildings(bookingRooms);
@@ -167,12 +167,12 @@ public class Client {
     }
 
     private void requestListOfBuildings() throws Exception {
-        ClientRequestMessage requestMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_BUILDINGS);
+        ClientMessage requestMessage = new ClientMessage(clientId, MessageType.LIST_BUILDINGS);
         sendMessageToAgent(requestMessage);
         startMessageProcessor();
     }
 
-    private void processBooking(ClientRequestMessage response) {
+    private void processBooking(ClientMessage response) {
         String building = response.getBuildingNames().get(0);
         ArrayList<Integer> rooms = response.getRooms(building);
         System.out.printf("Are you sure you want to book room(s) %s in building %s? Confirmation number: %s%n",
@@ -186,7 +186,7 @@ public class Client {
 
         if (userChoice == 1) {
             try {
-                ClientRequestMessage confirmMessage = new ClientRequestMessage(clientId, ClientRequestType.CONFIRM);
+                ClientMessage confirmMessage = new ClientMessage(clientId, MessageType.CONFIRM);
                 confirmMessage.setReservationNumber(response.getReservationNumber());
 
                 sendMessageToAgent(confirmMessage);
@@ -198,19 +198,19 @@ public class Client {
         }
     }
 
-    private void processBookingConfirmation(ClientRequestMessage response) {
+    private void processBookingConfirmation(ClientMessage response) {
         System.out.printf("Booking with confirmation number %s has been successfully confirmed.%n",
                 response.getReservationNumber());
         isNewMessageExpected = false;
     }
 
     private void requestListOfReservations() throws Exception {
-        ClientRequestMessage requestMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_RESERVATIONS);
+        ClientMessage requestMessage = new ClientMessage(clientId, MessageType.LIST_RESERVATIONS);
         sendMessageToAgent(requestMessage);
         startMessageProcessor();
     }
 
-    private void processReservationList(ClientRequestMessage response) throws IOException {
+    private void processReservationList(ClientMessage response) throws IOException {
         String reservationList = response.getReservationNumber();
         if (reservationList == null || reservationList.isEmpty()) {
             System.out.println("You have no reservations.");
@@ -244,7 +244,7 @@ public class Client {
                 }
             }
 
-            ClientRequestMessage cancelMessage = new ClientRequestMessage(clientId, ClientRequestType.CANCEL);
+            ClientMessage cancelMessage = new ClientMessage(clientId, MessageType.CANCEL);
             cancelMessage.setReservationNumber(reservationToCancel);
             sendMessageToAgent(cancelMessage);
         } else if (userChoice == 2) {
@@ -252,13 +252,13 @@ public class Client {
         }
     }
 
-    private void processCancelReservation(ClientRequestMessage response) {
+    private void processCancelReservation(ClientMessage response) {
         System.out.printf("Reservation with confirmation number %s has been successfully cancelled.%n",
                 response.getReservationNumber());
         isNewMessageExpected = false;
     }
 
-    private void processErrorMessage(ClientRequestMessage response) {
+    private void processErrorMessage(ClientMessage response) {
         String errorMessage = response.getErrorMessage();
         if (errorMessage != null && !errorMessage.isEmpty()) {
             System.out.printf("Error: %s%n", errorMessage);
@@ -269,7 +269,7 @@ public class Client {
     }
 
     // Helper method to send messages to the agent
-    private void sendMessageToAgent(ClientRequestMessage requestMessage) throws IOException {
+    private void sendMessageToAgent(ClientMessage requestMessage) throws IOException {
         String message = objectMapper.writeValueAsString(requestMessage);
         channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes(StandardCharsets.UTF_8));
     }

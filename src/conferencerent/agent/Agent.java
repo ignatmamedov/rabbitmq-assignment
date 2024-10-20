@@ -1,8 +1,9 @@
 package conferencerent.agent;
 
 import com.rabbitmq.client.*;
-import conferencerent.model.ClientRequestMessage;
-import conferencerent.model.ClientRequestType;
+import conferencerent.model.ClientMessage;
+import conferencerent.model.BuildingMessage;
+import conferencerent.model.MessageType;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -13,12 +14,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class Agent {
     private static final String EXCHANGE_CLIENT = "client_exchange";
+    private static final String EXCHANGE_DIRECT = "direct_exchange";
+    private static final String EXCHANGE_FANOUT = "building_announce_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
 
     // Store confirmed reservations per client
-    private static final Map<String, List<ClientRequestMessage>> reservations = new ConcurrentHashMap<>();
+    private static final Map<String, List<ClientMessage>> reservations = new ConcurrentHashMap<>();
     // Temporarily store unconfirmed reservations
-    private static final Map<String, ClientRequestMessage> unconfirmedReservations = new ConcurrentHashMap<>();
+    private static final Map<String, ClientMessage> unconfirmedReservations = new ConcurrentHashMap<>();
 
     // Store available rooms per building
     private static final Map<String, Set<Integer>> availableRooms = new ConcurrentHashMap<>();
@@ -34,79 +37,123 @@ public class Agent {
         objectMapper.configure(DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT, true);
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost("localhost");
-        // Set your RabbitMQ username and password if different
-        factory.setUsername("guest");
-        factory.setPassword("guest");
-        factory.setPort(5672);
         Connection connection = factory.newConnection();
         channel = connection.createChannel();
 
+        // Declare exchanges for clients and buildings
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
+        channel.exchangeDeclare(EXCHANGE_DIRECT, BuiltinExchangeType.DIRECT);
+        channel.exchangeDeclare(EXCHANGE_FANOUT, BuiltinExchangeType.FANOUT);
 
-        // Declare the queue for receiving messages from clients
+        // Declare queue for receiving messages from clients
         channel.queueDeclare(CLIENT_AGENT_QUEUE, false, false, false, null);
         channel.queueBind(CLIENT_AGENT_QUEUE, EXCHANGE_CLIENT, "client_to_agent");
 
-        initializeAvailableRooms();
-
+        // Listen for client requests
         listenForClientRequests();
-    }
 
-    // Initialize available rooms
-    private void initializeAvailableRooms() {
-        Map<String, Set<Integer>> initialRooms = new HashMap<>();
-        initialRooms.put("Building A", ConcurrentHashMap.newKeySet());
-        initialRooms.get("Building A").addAll(Arrays.asList(101, 102));
-        initialRooms.put("Building B", ConcurrentHashMap.newKeySet());
-        initialRooms.get("Building B").addAll(Arrays.asList(201, 202));
-        availableRooms.putAll(initialRooms);
+        // Listen for building messages and announcements
+        listenForBuildingMessages();
     }
 
     private void listenForClientRequests() throws Exception {
         channel.basicConsume(CLIENT_AGENT_QUEUE, true, (consumerTag, delivery) -> {
             String jsonRequest = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            ClientRequestMessage requestMessage;
+            ClientMessage requestMessage;
 
             try {
-                requestMessage = objectMapper.readValue(jsonRequest, ClientRequestMessage.class);
+                requestMessage = objectMapper.readValue(jsonRequest, ClientMessage.class);
             } catch (Exception e) {
                 e.printStackTrace();
                 return;
             }
 
-            System.out.println("Received request of type: " + requestMessage.getType());
+            System.out.println("Received client request of type: " + requestMessage.getType());
 
             switch (requestMessage.getType()) {
                 case LIST_BUILDINGS -> sendBuildingList(requestMessage.getClientId());
                 case BOOK -> sendReservationNumber(requestMessage);
-                case CONFIRM -> confirmBooking(requestMessage);
+                case CONFIRM -> confirmBooking(requestMessage);  // Trigger building interaction here
                 case LIST_RESERVATIONS -> listReservations(requestMessage.getClientId());
-                case CANCEL -> cancelReservation(requestMessage);
-                default -> System.out.println("Unknown request type.");
+                case CANCEL -> cancelReservation(requestMessage);  // Trigger building interaction here
+                default -> System.out.println("Unknown client request type.");
             }
         }, consumerTag -> {});
     }
 
-    private void sendBuildingList(String clientId) throws IOException {
-        ClientRequestMessage responseMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_BUILDINGS);
+    private void listenForBuildingMessages() throws Exception {
+        String queueName = "agent_to_building_queue";
+        channel.queueDeclare(queueName, false, false, false, null);
+        channel.queueBind(queueName, EXCHANGE_DIRECT, "agent_building_interaction");
 
-        // Create a deep copy of the availableRooms to avoid concurrent modification
+        channel.basicConsume(queueName, true, (consumerTag, delivery) -> {
+            String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            BuildingMessage buildingMessage;
+
+            try {
+                buildingMessage = objectMapper.readValue(jsonMessage, BuildingMessage.class);
+            } catch (Exception e) {
+                e.printStackTrace();
+                return;
+            }
+
+            System.out.println("Received building message of type: " + buildingMessage.getType());
+
+            switch (buildingMessage.getType()) {
+                case BUILDING_STATUS -> updateBuildingStatus(buildingMessage);
+                case BOOK -> handleBookResponse(buildingMessage);
+                case CANCEL -> handleCancelResponse(buildingMessage);
+                case ERROR -> handleError(buildingMessage);
+                default -> System.out.println("Unknown building message type.");
+            }
+        }, consumerTag -> {});
+
+        // Subscribe to the fanout exchange for building announcements
+        String announceQueue = channel.queueDeclare().getQueue();
+        channel.queueBind(announceQueue, EXCHANGE_FANOUT, "");
+        channel.basicConsume(announceQueue, true, (consumerTag, delivery) -> {
+            String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            BuildingMessage buildingMessage = objectMapper.readValue(jsonMessage, BuildingMessage.class);
+
+            updateBuildingStatus(buildingMessage);
+        }, consumerTag -> {});
+    }
+
+    private void updateBuildingStatus(BuildingMessage buildingMessage) {
+        availableRooms.put(buildingMessage.getBuildingName(), new HashSet<>(buildingMessage.getAvailableRooms()));
+        System.out.println("Updated available rooms for building: " + buildingMessage.getBuildingName());
+    }
+
+    private void handleBookResponse(BuildingMessage buildingMessage) {
+        System.out.println("Building booking result: " + (buildingMessage.isSuccess() ? "Success" : "Failed"));
+        updateBuildingStatus(buildingMessage);
+    }
+
+    private void handleCancelResponse(BuildingMessage buildingMessage) {
+        System.out.println("Building cancellation result: " + (buildingMessage.isSuccess() ? "Success" : "Failed"));
+        updateBuildingStatus(buildingMessage);
+    }
+
+    private void handleError(BuildingMessage buildingMessage) {
+        System.out.println("Error received: " + buildingMessage.getErrorMessage());
+    }
+
+    private void sendBuildingList(String clientId) throws IOException {
+        ClientMessage responseMessage = new ClientMessage(clientId, MessageType.LIST_BUILDINGS);
+
         Map<String, ArrayList<Integer>> bookingRooms = new HashMap<>();
         for (Map.Entry<String, Set<Integer>> entry : availableRooms.entrySet()) {
-            synchronized (entry.getValue()) {
-                bookingRooms.put(entry.getKey(), new ArrayList<>(entry.getValue()));
-            }
+            bookingRooms.put(entry.getKey(), new ArrayList<>(entry.getValue()));
         }
 
         responseMessage.setBuildings(bookingRooms);
         sendResponse(clientId, responseMessage);
     }
 
-    private void sendReservationNumber(ClientRequestMessage requestMessage) throws IOException {
+    private void sendReservationNumber(ClientMessage requestMessage) throws IOException {
         String clientId = requestMessage.getClientId();
         Map<String, ArrayList<Integer>> requestedRooms = requestMessage.getBuildings();
 
-        // Validate requested rooms
         boolean allRoomsAvailable = true;
         synchronized (availableRooms) {
             for (Map.Entry<String, ArrayList<Integer>> entry : requestedRooms.entrySet()) {
@@ -122,45 +169,38 @@ public class Agent {
         }
 
         if (!allRoomsAvailable) {
-            // Send error message to client
-            ClientRequestMessage errorMessage = new ClientRequestMessage(clientId, ClientRequestType.ERROR);
+            ClientMessage errorMessage = new ClientMessage(clientId, MessageType.ERROR);
             errorMessage.setErrorMessage("Requested rooms are not available.");
             sendResponse(clientId, errorMessage);
             return;
         }
 
-        // Generate a reservation number
         String reservationNumber = UUID.randomUUID().toString();
-
-        // Store the unconfirmed reservation
         requestMessage.setReservationNumber(reservationNumber);
         unconfirmedReservations.put(reservationNumber, requestMessage);
 
-        // Send response back to client
-        ClientRequestMessage responseMessage = new ClientRequestMessage(clientId, ClientRequestType.BOOK);
+        ClientMessage responseMessage = new ClientMessage(clientId, MessageType.BOOK);
         responseMessage.setReservationNumber(reservationNumber);
         responseMessage.setBuildings(requestMessage.getBuildings());
         sendResponse(clientId, responseMessage);
     }
 
-    private void confirmBooking(ClientRequestMessage requestMessage) throws IOException {
+    // When the Agent confirms a booking, it sends a BOOK message to the Building
+    private void confirmBooking(ClientMessage requestMessage) throws IOException {
         String reservationNumber = requestMessage.getReservationNumber();
         String clientId = requestMessage.getClientId();
 
-        // Retrieve the unconfirmed reservation
-        ClientRequestMessage unconfirmed = unconfirmedReservations.remove(reservationNumber);
-
+        ClientMessage unconfirmed = unconfirmedReservations.remove(reservationNumber);
         if (unconfirmed != null && unconfirmed.getClientId().equals(clientId)) {
             Map<String, ArrayList<Integer>> bookedRooms = unconfirmed.getBuildings();
-
-            // Validate and remove rooms from availableRooms
             boolean allRoomsAvailable = true;
+
             synchronized (availableRooms) {
                 for (Map.Entry<String, ArrayList<Integer>> entry : bookedRooms.entrySet()) {
                     String building = entry.getKey();
                     List<Integer> rooms = entry.getValue();
-
                     Set<Integer> available = availableRooms.get(building);
+
                     if (available == null || !available.containsAll(rooms)) {
                         allRoomsAvailable = false;
                         break;
@@ -168,49 +208,119 @@ public class Agent {
                 }
 
                 if (allRoomsAvailable) {
-                    // Remove rooms from availableRooms
                     for (Map.Entry<String, ArrayList<Integer>> entry : bookedRooms.entrySet()) {
                         String building = entry.getKey();
-                        List<Integer> rooms = entry.getValue();
-
                         Set<Integer> available = availableRooms.get(building);
                         if (available != null) {
-                            available.removeAll(rooms);
+                            available.removeAll(entry.getValue());
                         }
                     }
+
+                    // **Send BOOK message to Building** after confirming with the Client
+                    sendBookMessageToBuilding(unconfirmed);
                 }
             }
 
             if (allRoomsAvailable) {
-                // Add to confirmed reservations
                 reservations.computeIfAbsent(clientId, k -> Collections.synchronizedList(new ArrayList<>())).add(unconfirmed);
-
-                // Send confirmation to client
-                ClientRequestMessage responseMessage = new ClientRequestMessage(clientId, ClientRequestType.CONFIRM);
+                ClientMessage responseMessage = new ClientMessage(clientId, MessageType.CONFIRM);
                 responseMessage.setReservationNumber(reservationNumber);
                 sendResponse(clientId, responseMessage);
             } else {
-                // Send error message to client
-                ClientRequestMessage errorMessage = new ClientRequestMessage(clientId, ClientRequestType.ERROR);
+                ClientMessage errorMessage = new ClientMessage(clientId, MessageType.ERROR);
                 errorMessage.setErrorMessage("Requested rooms are no longer available.");
                 sendResponse(clientId, errorMessage);
             }
         } else {
-            // Send error message to client
-            ClientRequestMessage errorMessage = new ClientRequestMessage(clientId, ClientRequestType.ERROR);
+            ClientMessage errorMessage = new ClientMessage(clientId, MessageType.ERROR);
             errorMessage.setErrorMessage("Invalid reservation number.");
             sendResponse(clientId, errorMessage);
         }
     }
 
-    private void listReservations(String clientId) throws IOException {
-        List<ClientRequestMessage> clientReservations = reservations.get(clientId);
+    // When the Agent cancels a booking, it sends a CANCEL message to the Building
+    private void cancelReservation(ClientMessage requestMessage) throws IOException {
+        String reservationNumber = requestMessage.getReservationNumber();
+        String clientId = requestMessage.getClientId();
+        List<ClientMessage> clientReservations = reservations.get(clientId);
 
-        ClientRequestMessage responseMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_RESERVATIONS);
+        if (clientReservations != null) {
+            ClientMessage toRemove = null;
+            for (ClientMessage reservation : clientReservations) {
+                if (reservation.getReservationNumber().equals(reservationNumber)) {
+                    toRemove = reservation;
+                    break;
+                }
+            }
+
+            if (toRemove != null) {
+                Map<String, ArrayList<Integer>> canceledRooms = toRemove.getBuildings();
+                synchronized (availableRooms) {
+                    for (Map.Entry<String, ArrayList<Integer>> entry : canceledRooms.entrySet()) {
+                        availableRooms.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).addAll(entry.getValue());
+                    }
+                }
+
+                clientReservations.remove(toRemove);
+
+                // **Send CANCEL message to Building** after cancelling with the Client
+                sendCancelMessageToBuilding(toRemove);
+
+                ClientMessage responseMessage = new ClientMessage(clientId, MessageType.CANCEL);
+                responseMessage.setReservationNumber(reservationNumber);
+                sendResponse(clientId, responseMessage);
+                return;
+            }
+        }
+
+        ClientMessage errorMessage = new ClientMessage(clientId, MessageType.ERROR);
+        errorMessage.setErrorMessage("Reservation not found or already canceled.");
+        sendResponse(clientId, errorMessage);
+    }
+
+    // Helper method to send BOOK message to Building
+    private void sendBookMessageToBuilding(ClientMessage clientMessage) throws IOException {
+        BuildingMessage bookRequest = new BuildingMessage();
+        bookRequest.setType(MessageType.BOOK);
+
+        // Assuming one building; adjust if necessary to handle multiple buildings in one request
+        String buildingName = clientMessage.getBuildings().keySet().iterator().next();
+        bookRequest.setBuildingName(buildingName);
+        bookRequest.setRequestedRooms(clientMessage.getBuildings().values().iterator().next());
+
+        String message = objectMapper.writeValueAsString(bookRequest);
+
+        // Send to the building's queue using the building's name as the routing key
+        channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
+
+        System.out.println("Sent BOOK request to building: " + buildingName);
+    }
+
+    // Helper method to send CANCEL message to Building
+    private void sendCancelMessageToBuilding(ClientMessage clientMessage) throws IOException {
+        BuildingMessage cancelRequest = new BuildingMessage();
+        cancelRequest.setType(MessageType.CANCEL);
+
+        // Assuming one building; adjust if necessary to handle multiple buildings in one request
+        String buildingName = clientMessage.getBuildings().keySet().iterator().next();
+        cancelRequest.setBuildingName(buildingName);
+        cancelRequest.setRequestedRooms(clientMessage.getBuildings().values().iterator().next());
+
+        String message = objectMapper.writeValueAsString(cancelRequest);
+
+        // Send to the building's queue using the building's name as the routing key
+        channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
+
+        System.out.println("Sent CANCEL request to building: " + buildingName);
+    }
+
+    private void listReservations(String clientId) throws IOException {
+        List<ClientMessage> clientReservations = reservations.get(clientId);
+        ClientMessage responseMessage = new ClientMessage(clientId, MessageType.LIST_RESERVATIONS);
+
         if (clientReservations != null && !clientReservations.isEmpty()) {
-            // Collect reservation numbers
             StringBuilder reservationNumbers = new StringBuilder();
-            for (ClientRequestMessage reservation : clientReservations) {
+            for (ClientMessage reservation : clientReservations) {
                 if (reservationNumbers.length() > 0) {
                     reservationNumbers.append(",");
                 }
@@ -224,51 +334,7 @@ public class Agent {
         sendResponse(clientId, responseMessage);
     }
 
-    private void cancelReservation(ClientRequestMessage requestMessage) throws IOException {
-        String reservationNumber = requestMessage.getReservationNumber();
-        String clientId = requestMessage.getClientId();
-
-        // Check in confirmed reservations
-        List<ClientRequestMessage> clientReservations = reservations.get(clientId);
-        if (clientReservations != null) {
-            ClientRequestMessage toRemove = null;
-            for (ClientRequestMessage reservation : clientReservations) {
-                if (reservation.getReservationNumber().equals(reservationNumber)) {
-                    toRemove = reservation;
-                    break;
-                }
-            }
-            if (toRemove != null) {
-                Map<String, ArrayList<Integer>> canceledRooms = toRemove.getBuildings();
-
-                // Return rooms to availableRooms
-                synchronized (availableRooms) {
-                    for (Map.Entry<String, ArrayList<Integer>> entry : canceledRooms.entrySet()) {
-                        String building = entry.getKey();
-                        List<Integer> rooms = entry.getValue();
-
-                        availableRooms.computeIfAbsent(building, k -> ConcurrentHashMap.newKeySet()).addAll(rooms);
-                    }
-                }
-
-                clientReservations.remove(toRemove);
-
-                // Send cancellation confirmation
-                ClientRequestMessage responseMessage = new ClientRequestMessage(clientId, ClientRequestType.CANCEL);
-                responseMessage.setReservationNumber(reservationNumber);
-                sendResponse(clientId, responseMessage);
-                return;
-            }
-        }
-
-        // Send error message
-        ClientRequestMessage errorMessage = new ClientRequestMessage(clientId, ClientRequestType.ERROR);
-        errorMessage.setErrorMessage("Reservation not found or already canceled.");
-        sendResponse(clientId, errorMessage);
-    }
-
-    // Method to send responses to clients
-    private void sendResponse(String clientId, ClientRequestMessage responseMessage) throws IOException {
+    private void sendResponse(String clientId, ClientMessage responseMessage) throws IOException {
         String message = objectMapper.writeValueAsString(responseMessage);
         channel.basicPublish(EXCHANGE_CLIENT, clientId, null, message.getBytes(StandardCharsets.UTF_8));
     }

@@ -8,9 +8,9 @@ import java.util.Map;
 import java.util.HashMap;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class ClientRequestMessage {
+public class ClientMessage {
     private String clientId;
-    private ClientRequestType type;
+    private MessageType type;
     @JsonProperty("buildings")
     private Map<String, ArrayList<Integer>> buildings;
     private String reservationNumber;
@@ -25,17 +25,17 @@ public class ClientRequestMessage {
         this.errorMessage = errorMessage;
     }
 
-    public ClientRequestMessage() {
+    public ClientMessage() {
         this.buildings = new HashMap<>();
     }
 
-    public ClientRequestMessage(String clientId, ClientRequestType type) {
+    public ClientMessage(String clientId, MessageType type) {
         this.clientId = clientId;
         this.type = type;
         this.buildings = new HashMap<>();
     }
 
-    public ClientRequestType getType() {
+    public MessageType getType() {
         return type;
     }
 
