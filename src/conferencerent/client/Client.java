@@ -21,13 +21,12 @@ public class Client {
     private final String clientId = UUID.randomUUID().toString();
     private final static String EXCHANGE_CLIENT = "client_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
-    // Removed shared AGENT_CLIENT_QUEUE
 
     Connection connection;
     private static Channel channel;
 
-    ObjectMapper objectMapper = new ObjectMapper();
-    Scanner scanner = new Scanner(System.in);
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final Scanner scanner = new Scanner(System.in);
     private final Lock lock = new ReentrantLock();
     private final Condition newMessageReceived = lock.newCondition();
     private boolean isNewMessage = false;
@@ -59,10 +58,8 @@ public class Client {
         channel = connection.createChannel();
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
 
-        // Declare the queue for sending messages to the agent
         channel.queueDeclare(CLIENT_AGENT_QUEUE, false, false, false, null);
 
-        // Declare a unique queue for this client to receive messages
         String clientQueueName = "agent_to_client_queue_" + clientId;
         channel.queueDeclare(clientQueueName, false, false, true, null);
         channel.queueBind(clientQueueName, EXCHANGE_CLIENT, clientId);
@@ -77,13 +74,13 @@ public class Client {
                     "2. Request your reservations",
                     "3. Exit"
             };
-            int choice = displayMenuAndGetChoice("Conference Room Booking System", mainMenuOptions, 1, 3);
+            int choice = displayMenuAndGetChoice("Conference Room Booking System", mainMenuOptions, 3);
 
             switch (choice) {
                 case 1 -> requestListOfBuildings();
                 case 2 -> requestListOfReservations();
                 case 3 -> running = false;
-                default -> System.out.println("Invalid choice. Please try again."); // Should not reach here due to validation
+                default -> System.out.println("Invalid choice. Please try again.");
             }
         }
     }
@@ -145,7 +142,7 @@ public class Client {
                 "1. Book rooms",
                 "2. Exit"
         };
-        int bookingChoice = displayMenuAndGetChoice(null, options, 1, 2);
+        int bookingChoice = displayMenuAndGetChoice(null, options, 2);
 
         if (bookingChoice == 1) {
             String building = getValidBuilding(buildings);
@@ -182,7 +179,7 @@ public class Client {
                 "1. Confirm booking",
                 "2. Exit"
         };
-        int userChoice = displayMenuAndGetChoice(null, options, 1, 2);
+        int userChoice = displayMenuAndGetChoice(null, options, 2);
 
         if (userChoice == 1) {
             try {
@@ -230,7 +227,7 @@ public class Client {
                 "1. Cancel a reservation",
                 "2. Exit"
         };
-        int userChoice = displayMenuAndGetChoice(null, options, 1, 2);
+        int userChoice = displayMenuAndGetChoice(null, options, 2);
 
         if (userChoice == 1) {
             String reservationToCancel;
@@ -268,14 +265,12 @@ public class Client {
         isNewMessageExpected = false;
     }
 
-    // Helper method to send messages to the agent
     private void sendMessageToAgent(ClientMessage requestMessage) throws IOException {
         String message = objectMapper.writeValueAsString(requestMessage);
         channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes(StandardCharsets.UTF_8));
     }
 
-    // Helper method to display a menu and get user's choice
-    private int displayMenuAndGetChoice(String header, String[] options, int min, int max) {
+    private int displayMenuAndGetChoice(String header, String[] options, int max) {
         if (header != null) {
             System.out.println(header);
         }
@@ -283,19 +278,18 @@ public class Client {
             System.out.println(option);
         }
         System.out.print("Choose an option: ");
-        return readIntInput(min, max);
+        return readIntInput(max);
     }
 
-    // Helper method to read integer input within a range
-    private int readIntInput(int min, int max) {
+    private int readIntInput(int max) {
         int choice;
         while (true) {
             try {
                 choice = Integer.parseInt(scanner.nextLine());
-                if (choice >= min && choice <= max) {
+                if (choice >= 1 && choice <= max) {
                     break;
                 } else {
-                    System.out.printf("Please enter a number between %d and %d.%n", min, max);
+                    System.out.printf("Please enter a number between %d and %d.%n", 1, max);
                     System.out.print("Choose an option: ");
                 }
             } catch (NumberFormatException e) {
@@ -306,7 +300,6 @@ public class Client {
         return choice;
     }
 
-    // Overloaded method to include custom prompt
     private int readIntInput(String prompt, int min, int max) {
         int choice;
         while (true) {
@@ -325,7 +318,6 @@ public class Client {
         return choice;
     }
 
-    // Helper method to get a valid building from the user
     private String getValidBuilding(Map<String, ArrayList<Integer>> buildings) {
         String building;
         while (true) {
@@ -340,7 +332,6 @@ public class Client {
         return building;
     }
 
-    // Helper method to get valid room numbers from the user
     private List<Integer> getValidRooms(ArrayList<Integer> availableRooms, String building) {
         List<Integer> rooms = new ArrayList<>();
         while (true) {

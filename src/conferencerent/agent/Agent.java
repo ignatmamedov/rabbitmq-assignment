@@ -1,6 +1,5 @@
 package conferencerent.agent;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.rabbitmq.client.*;
 import conferencerent.model.ClientMessage;
 import conferencerent.model.BuildingMessage;
@@ -18,7 +17,7 @@ public class Agent {
     private static final String EXCHANGE_DIRECT = "direct_exchange";
     private static final String EXCHANGE_FANOUT = "building_announce_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
-    private static final String AGENT_QUEUE_NAME = "agent_to_building_queue_" +  UUID.randomUUID().toString();
+    private static final String AGENT_QUEUE_NAME = "agent_to_building_queue_" + UUID.randomUUID();
 
     private static final Map<String, List<ClientMessage>> reservations = new ConcurrentHashMap<>();
     private static final Map<String, ClientMessage> unconfirmedReservations = new ConcurrentHashMap<>();
@@ -42,15 +41,12 @@ public class Agent {
         Connection connection = factory.newConnection();
         channel = connection.createChannel();
 
-        // Declare exchanges for clients and buildings
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
         channel.exchangeDeclare(EXCHANGE_FANOUT, BuiltinExchangeType.FANOUT);
 
-        // Declare queue for receiving messages from clients (transient, not durable)
         channel.queueDeclare(CLIENT_AGENT_QUEUE, false, false, false, null);
         channel.queueBind(CLIENT_AGENT_QUEUE, EXCHANGE_CLIENT, "client_to_agent");
 
-        // Declare queue for receiving messages from buildings (transient, not durable)
         channel.queueDeclare(AGENT_QUEUE_NAME, false, false, false, null);
 
         channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_DIRECT, "agent_building_interaction");
@@ -161,16 +157,7 @@ public class Agent {
 
         boolean allRoomsAvailable = true;
         synchronized (availableRooms) {
-            for (Map.Entry<String, ArrayList<Integer>> entry : requestedRooms.entrySet()) {
-                String building = entry.getKey();
-                List<Integer> rooms = entry.getValue();
-
-                Set<Integer> available = availableRooms.get(building);
-                if (available == null || !available.containsAll(rooms)) {
-                    allRoomsAvailable = false;
-                    break;
-                }
-            }
+            allRoomsAvailable = isAllRoomsAvailable(requestedRooms, allRoomsAvailable);
         }
 
         if (!allRoomsAvailable) {
@@ -190,6 +177,20 @@ public class Agent {
         sendResponse(clientId, responseMessage);
     }
 
+    private boolean isAllRoomsAvailable(Map<String, ArrayList<Integer>> requestedRooms, boolean allRoomsAvailable) {
+        for (Map.Entry<String, ArrayList<Integer>> entry : requestedRooms.entrySet()) {
+            String building = entry.getKey();
+            List<Integer> rooms = entry.getValue();
+
+            Set<Integer> available = availableRooms.get(building);
+            if (available == null || !available.containsAll(rooms)) {
+                allRoomsAvailable = false;
+                break;
+            }
+        }
+        return allRoomsAvailable;
+    }
+
     private void confirmBooking(ClientMessage requestMessage) throws IOException {
         String reservationNumber = requestMessage.getReservationNumber();
         String clientId = requestMessage.getClientId();
@@ -200,16 +201,7 @@ public class Agent {
             boolean allRoomsAvailable = true;
 
             synchronized (availableRooms) {
-                for (Map.Entry<String, ArrayList<Integer>> entry : bookedRooms.entrySet()) {
-                    String building = entry.getKey();
-                    List<Integer> rooms = entry.getValue();
-                    Set<Integer> available = availableRooms.get(building);
-
-                    if (available == null || !available.containsAll(rooms)) {
-                        allRoomsAvailable = false;
-                        break;
-                    }
-                }
+                allRoomsAvailable = isAllRoomsAvailable(bookedRooms, allRoomsAvailable);
 
                 if (allRoomsAvailable) {
                     for (Map.Entry<String, ArrayList<Integer>> entry : bookedRooms.entrySet()) {
@@ -283,6 +275,12 @@ public class Agent {
         BuildingMessage bookRequest = new BuildingMessage();
         bookRequest.setType(MessageType.BOOK);
 
+        sendBookingRequest(clientMessage, bookRequest);
+
+        System.out.println("Sent BOOK request to building: " + clientMessage.getBuildings().values().iterator().next());
+    }
+
+    private void sendBookingRequest(ClientMessage clientMessage, BuildingMessage bookRequest) throws IOException {
         String buildingName = clientMessage.getBuildings().keySet().iterator().next();
         bookRequest.setBuildingName(buildingName);
         bookRequest.setRequestedRooms(clientMessage.getBuildings().values().iterator().next());
@@ -290,23 +288,15 @@ public class Agent {
         String message = objectMapper.writeValueAsString(bookRequest);
 
         channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
-
-        System.out.println("Sent BOOK request to building: " + buildingName);
     }
 
     private void sendCancelMessageToBuilding(ClientMessage clientMessage) throws IOException {
         BuildingMessage cancelRequest = new BuildingMessage();
         cancelRequest.setType(MessageType.CANCEL);
 
-        String buildingName = clientMessage.getBuildings().keySet().iterator().next();
-        cancelRequest.setBuildingName(buildingName);
-        cancelRequest.setRequestedRooms(clientMessage.getBuildings().values().iterator().next());
+        sendBookingRequest(clientMessage, cancelRequest);
 
-        String message = objectMapper.writeValueAsString(cancelRequest);
-
-        channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
-
-        System.out.println("Sent CANCEL request to building: " + buildingName);
+        System.out.println("Sent CANCEL request to building: " + clientMessage.getBuildings().values().iterator().next());
     }
 
     private void listReservations(String clientId) throws IOException {
@@ -316,7 +306,7 @@ public class Agent {
         if (clientReservations != null && !clientReservations.isEmpty()) {
             StringBuilder reservationNumbers = new StringBuilder();
             for (ClientMessage reservation : clientReservations) {
-                if (reservationNumbers.length() > 0) {
+                if (!reservationNumbers.isEmpty()) {
                     reservationNumbers.append(",");
                 }
                 reservationNumbers.append(reservation.getReservationNumber());
