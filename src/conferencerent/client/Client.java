@@ -4,9 +4,10 @@ import com.rabbitmq.client.BuiltinExchangeType;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+
 import conferencerent.model.ClientRequestMessage;
 import conferencerent.model.ClientRequestType;
-import org.codehaus.jackson.map.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -17,10 +18,10 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Client {
-    private static final String clientId = UUID.randomUUID().toString();
+    private final String clientId = UUID.randomUUID().toString();
     private final static String EXCHANGE_CLIENT = "client_exchange";
-    private static final String AGENT_CLIENT_QUEUE = "agent_to_client_queue";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
+    // Removed shared AGENT_CLIENT_QUEUE
 
     Connection connection;
     private static Channel channel;
@@ -57,9 +58,14 @@ public class Client {
         connection = factory.newConnection();
         channel = connection.createChannel();
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
+
+        // Declare the queue for sending messages to the agent
         channel.queueDeclare(CLIENT_AGENT_QUEUE, false, false, false, null);
-        channel.queueDeclare(AGENT_CLIENT_QUEUE, false, false, false, null);
-        channel.queueBind(AGENT_CLIENT_QUEUE, EXCHANGE_CLIENT, "agent_to_client");
+
+        // Declare a unique queue for this client to receive messages
+        String clientQueueName = "agent_to_client_queue_" + clientId;
+        channel.queueDeclare(clientQueueName, false, false, true, null);
+        channel.queueBind(clientQueueName, EXCHANGE_CLIENT, clientId);
     }
 
     private void startBooking() throws Exception {
@@ -83,7 +89,8 @@ public class Client {
     }
 
     private void startResponseMonitor() throws Exception {
-        channel.basicConsume(AGENT_CLIENT_QUEUE, true, (consumerTag, delivery) -> {
+        String clientQueueName = "agent_to_client_queue_" + clientId;
+        channel.basicConsume(clientQueueName, true, (consumerTag, delivery) -> {
             String jsonResponse = new String(delivery.getBody(), StandardCharsets.UTF_8);
             lock.lock();
             try {
@@ -150,8 +157,7 @@ public class Client {
                 bookingRooms.put(building, new ArrayList<>(rooms));
                 bookingRequest.setBuildings(bookingRooms);
 
-                String message = objectMapper.writeValueAsString(bookingRequest);
-                channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes());
+                sendMessageToAgent(bookingRequest);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -162,8 +168,7 @@ public class Client {
 
     private void requestListOfBuildings() throws Exception {
         ClientRequestMessage requestMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_BUILDINGS);
-        String message = objectMapper.writeValueAsString(requestMessage);
-        channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes());
+        sendMessageToAgent(requestMessage);
         startMessageProcessor();
     }
 
@@ -183,9 +188,8 @@ public class Client {
             try {
                 ClientRequestMessage confirmMessage = new ClientRequestMessage(clientId, ClientRequestType.CONFIRM);
                 confirmMessage.setReservationNumber(response.getReservationNumber());
-                String message = objectMapper.writeValueAsString(confirmMessage);
 
-                channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes());
+                sendMessageToAgent(confirmMessage);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -202,8 +206,7 @@ public class Client {
 
     private void requestListOfReservations() throws Exception {
         ClientRequestMessage requestMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_RESERVATIONS);
-        String message = objectMapper.writeValueAsString(requestMessage);
-        channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes());
+        sendMessageToAgent(requestMessage);
         startMessageProcessor();
     }
 
@@ -243,8 +246,7 @@ public class Client {
 
             ClientRequestMessage cancelMessage = new ClientRequestMessage(clientId, ClientRequestType.CANCEL);
             cancelMessage.setReservationNumber(reservationToCancel);
-            String message = objectMapper.writeValueAsString(cancelMessage);
-            channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes());
+            sendMessageToAgent(cancelMessage);
         } else if (userChoice == 2) {
             isNewMessageExpected = false;
         }
@@ -264,6 +266,12 @@ public class Client {
             System.out.println("An unknown error occurred.");
         }
         isNewMessageExpected = false;
+    }
+
+    // Helper method to send messages to the agent
+    private void sendMessageToAgent(ClientRequestMessage requestMessage) throws IOException {
+        String message = objectMapper.writeValueAsString(requestMessage);
+        channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes(StandardCharsets.UTF_8));
     }
 
     // Helper method to display a menu and get user's choice
