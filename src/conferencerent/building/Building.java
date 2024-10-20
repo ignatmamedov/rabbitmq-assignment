@@ -48,6 +48,8 @@ public class Building {
 
         announceBuilding();  // Broadcast building's existence
         listenForAgentRequests(buildingQueue);  // Listen for requests from agents
+
+
     }
 
     // Announce the building's presence by sending an initial status update

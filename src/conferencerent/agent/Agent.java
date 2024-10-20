@@ -1,5 +1,6 @@
 package conferencerent.agent;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.rabbitmq.client.*;
 import conferencerent.model.ClientMessage;
 import conferencerent.model.BuildingMessage;
@@ -17,15 +18,15 @@ public class Agent {
     private static final String EXCHANGE_DIRECT = "direct_exchange";
     private static final String EXCHANGE_FANOUT = "building_announce_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
-    private static final String AGENT_QUEUE_NAME = "agent_to_building_queue";
+    private static final String AGENT_QUEUE_NAME = "agent_to_building_queue_" +  UUID.randomUUID().toString();
 
-    // Store confirmed reservations per client
     private static final Map<String, List<ClientMessage>> reservations = new ConcurrentHashMap<>();
-    // Temporarily store unconfirmed reservations
     private static final Map<String, ClientMessage> unconfirmedReservations = new ConcurrentHashMap<>();
-
-    // Store available rooms per building
     private static final Map<String, Set<Integer>> availableRooms = new ConcurrentHashMap<>();
+
+    private static final Map<String, Long> buildingTimestamps = new ConcurrentHashMap<>();
+
+    private static final int TIMEOUT = 1000;
 
     private static Channel channel;
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -55,23 +56,20 @@ public class Agent {
         channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_DIRECT, "agent_building_interaction");
         channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_FANOUT, "");
 
-        // Request the status from all buildings upon startup
         requestBuildingStatusFromAll();
 
-        // Listen for client requests
         listenForClientRequests();
 
-        // Listen for building messages and announcements
         listenForBuildingMessages();
+
+        removeInactiveBuildings();
     }
 
-    // Send a REQUEST_BUILDING_STATUS request to all buildings via fanout exchange
     private void requestBuildingStatusFromAll() throws IOException {
         BuildingMessage request = new BuildingMessage();
         request.setType(MessageType.REQUEST_BUILDING_STATUS);
         String message = objectMapper.writeValueAsString(request);
 
-        // Use fanout exchange to send the message to all buildings
         channel.basicPublish(EXCHANGE_FANOUT, "", null, message.getBytes(StandardCharsets.UTF_8));
         System.out.println("Sent REQUEST_BUILDING_STATUS to all buildings.");
     }
@@ -127,6 +125,7 @@ public class Agent {
 
     private void updateBuildingStatus(BuildingMessage buildingMessage) {
         availableRooms.put(buildingMessage.getBuildingName(), new HashSet<>(buildingMessage.getAvailableRooms()));
+        buildingTimestamps.put(buildingMessage.getBuildingName(), System.currentTimeMillis());
         System.out.println("Updated available rooms for building: " + buildingMessage.getBuildingName());
     }
 
@@ -280,7 +279,6 @@ public class Agent {
         sendResponse(clientId, errorMessage);
     }
 
-    // Helper method to send BOOK message to Building
     private void sendBookMessageToBuilding(ClientMessage clientMessage) throws IOException {
         BuildingMessage bookRequest = new BuildingMessage();
         bookRequest.setType(MessageType.BOOK);
@@ -296,7 +294,6 @@ public class Agent {
         System.out.println("Sent BOOK request to building: " + buildingName);
     }
 
-    // Helper method to send CANCEL message to Building
     private void sendCancelMessageToBuilding(ClientMessage clientMessage) throws IOException {
         BuildingMessage cancelRequest = new BuildingMessage();
         cancelRequest.setType(MessageType.CANCEL);
@@ -336,4 +333,42 @@ public class Agent {
         String message = objectMapper.writeValueAsString(responseMessage);
         channel.basicPublish(EXCHANGE_CLIENT, clientId, null, message.getBytes(StandardCharsets.UTF_8));
     }
+    private void removeInactiveBuildings(){
+        new Thread(() -> {
+            while (true) {
+                try {
+                    long currentTime = System.currentTimeMillis();
+
+                    buildingTimestamps.forEach((buildingName, lastUpdated) -> {
+                        if (currentTime - lastUpdated > TIMEOUT) {
+                            availableRooms.remove(buildingName);
+                            buildingTimestamps.remove(buildingName);
+                            try {
+                                requestBuildingStatus(buildingName);
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                            System.out.println("Removed inactive building: " + buildingName);
+                        }
+                    });
+
+                    Thread.sleep(TIMEOUT);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+    }
+
+    private void requestBuildingStatus(String buildingName) throws IOException {
+        BuildingMessage request = new BuildingMessage();
+        request.setType(MessageType.REQUEST_BUILDING_STATUS);
+        request.setBuildingName(buildingName);
+
+        String message = objectMapper.writeValueAsString(request);
+        channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
+
+        System.out.println("Sent REQUEST_BUILDING_STATUS to building: " + buildingName);
+    }
+
 }
