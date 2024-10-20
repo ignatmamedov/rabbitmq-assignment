@@ -8,5 +8,6 @@ public enum MessageType {
     CONFIRM,
     CANCEL,
     ERROR,
+    REQUEST_BUILDING_STATUS
 }
 

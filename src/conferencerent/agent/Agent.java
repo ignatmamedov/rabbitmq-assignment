@@ -17,6 +17,7 @@ public class Agent {
     private static final String EXCHANGE_DIRECT = "direct_exchange";
     private static final String EXCHANGE_FANOUT = "building_announce_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
+    private static final String AGENT_QUEUE_NAME = "agent_to_building_queue";
 
     // Store confirmed reservations per client
     private static final Map<String, List<ClientMessage>> reservations = new ConcurrentHashMap<>();
@@ -42,18 +43,37 @@ public class Agent {
 
         // Declare exchanges for clients and buildings
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
-        channel.exchangeDeclare(EXCHANGE_DIRECT, BuiltinExchangeType.DIRECT);
         channel.exchangeDeclare(EXCHANGE_FANOUT, BuiltinExchangeType.FANOUT);
 
-        // Declare queue for receiving messages from clients
+        // Declare queue for receiving messages from clients (transient, not durable)
         channel.queueDeclare(CLIENT_AGENT_QUEUE, false, false, false, null);
         channel.queueBind(CLIENT_AGENT_QUEUE, EXCHANGE_CLIENT, "client_to_agent");
+
+        // Declare queue for receiving messages from buildings (transient, not durable)
+        channel.queueDeclare(AGENT_QUEUE_NAME, false, false, false, null);
+
+        channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_DIRECT, "agent_building_interaction");
+        channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_FANOUT, "");
+
+        // Request the status from all buildings upon startup
+        requestBuildingStatusFromAll();
 
         // Listen for client requests
         listenForClientRequests();
 
         // Listen for building messages and announcements
         listenForBuildingMessages();
+    }
+
+    // Send a REQUEST_BUILDING_STATUS request to all buildings via fanout exchange
+    private void requestBuildingStatusFromAll() throws IOException {
+        BuildingMessage request = new BuildingMessage();
+        request.setType(MessageType.REQUEST_BUILDING_STATUS);
+        String message = objectMapper.writeValueAsString(request);
+
+        // Use fanout exchange to send the message to all buildings
+        channel.basicPublish(EXCHANGE_FANOUT, "", null, message.getBytes(StandardCharsets.UTF_8));
+        System.out.println("Sent REQUEST_BUILDING_STATUS to all buildings.");
     }
 
     private void listenForClientRequests() throws Exception {
@@ -73,20 +93,16 @@ public class Agent {
             switch (requestMessage.getType()) {
                 case LIST_BUILDINGS -> sendBuildingList(requestMessage.getClientId());
                 case BOOK -> sendReservationNumber(requestMessage);
-                case CONFIRM -> confirmBooking(requestMessage);  // Trigger building interaction here
+                case CONFIRM -> confirmBooking(requestMessage);
                 case LIST_RESERVATIONS -> listReservations(requestMessage.getClientId());
-                case CANCEL -> cancelReservation(requestMessage);  // Trigger building interaction here
+                case CANCEL -> cancelReservation(requestMessage);
                 default -> System.out.println("Unknown client request type.");
             }
         }, consumerTag -> {});
     }
 
     private void listenForBuildingMessages() throws Exception {
-        String queueName = "agent_to_building_queue";
-        channel.queueDeclare(queueName, false, false, false, null);
-        channel.queueBind(queueName, EXCHANGE_DIRECT, "agent_building_interaction");
-
-        channel.basicConsume(queueName, true, (consumerTag, delivery) -> {
+        channel.basicConsume(AGENT_QUEUE_NAME, true, (consumerTag, delivery) -> {
             String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
             BuildingMessage buildingMessage;
 
@@ -106,16 +122,6 @@ public class Agent {
                 case ERROR -> handleError(buildingMessage);
                 default -> System.out.println("Unknown building message type.");
             }
-        }, consumerTag -> {});
-
-        // Subscribe to the fanout exchange for building announcements
-        String announceQueue = channel.queueDeclare().getQueue();
-        channel.queueBind(announceQueue, EXCHANGE_FANOUT, "");
-        channel.basicConsume(announceQueue, true, (consumerTag, delivery) -> {
-            String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            BuildingMessage buildingMessage = objectMapper.readValue(jsonMessage, BuildingMessage.class);
-
-            updateBuildingStatus(buildingMessage);
         }, consumerTag -> {});
     }
 
@@ -185,7 +191,6 @@ public class Agent {
         sendResponse(clientId, responseMessage);
     }
 
-    // When the Agent confirms a booking, it sends a BOOK message to the Building
     private void confirmBooking(ClientMessage requestMessage) throws IOException {
         String reservationNumber = requestMessage.getReservationNumber();
         String clientId = requestMessage.getClientId();
@@ -216,7 +221,6 @@ public class Agent {
                         }
                     }
 
-                    // **Send BOOK message to Building** after confirming with the Client
                     sendBookMessageToBuilding(unconfirmed);
                 }
             }
@@ -238,7 +242,6 @@ public class Agent {
         }
     }
 
-    // When the Agent cancels a booking, it sends a CANCEL message to the Building
     private void cancelReservation(ClientMessage requestMessage) throws IOException {
         String reservationNumber = requestMessage.getReservationNumber();
         String clientId = requestMessage.getClientId();
@@ -263,7 +266,6 @@ public class Agent {
 
                 clientReservations.remove(toRemove);
 
-                // **Send CANCEL message to Building** after cancelling with the Client
                 sendCancelMessageToBuilding(toRemove);
 
                 ClientMessage responseMessage = new ClientMessage(clientId, MessageType.CANCEL);
@@ -283,14 +285,12 @@ public class Agent {
         BuildingMessage bookRequest = new BuildingMessage();
         bookRequest.setType(MessageType.BOOK);
 
-        // Assuming one building; adjust if necessary to handle multiple buildings in one request
         String buildingName = clientMessage.getBuildings().keySet().iterator().next();
         bookRequest.setBuildingName(buildingName);
         bookRequest.setRequestedRooms(clientMessage.getBuildings().values().iterator().next());
 
         String message = objectMapper.writeValueAsString(bookRequest);
 
-        // Send to the building's queue using the building's name as the routing key
         channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
 
         System.out.println("Sent BOOK request to building: " + buildingName);
@@ -301,14 +301,12 @@ public class Agent {
         BuildingMessage cancelRequest = new BuildingMessage();
         cancelRequest.setType(MessageType.CANCEL);
 
-        // Assuming one building; adjust if necessary to handle multiple buildings in one request
         String buildingName = clientMessage.getBuildings().keySet().iterator().next();
         cancelRequest.setBuildingName(buildingName);
         cancelRequest.setRequestedRooms(clientMessage.getBuildings().values().iterator().next());
 
         String message = objectMapper.writeValueAsString(cancelRequest);
 
-        // Send to the building's queue using the building's name as the routing key
         channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
 
         System.out.println("Sent CANCEL request to building: " + buildingName);

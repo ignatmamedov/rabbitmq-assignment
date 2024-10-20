@@ -43,7 +43,8 @@ public class Building {
         // Declare queue for the building to receive messages
         String buildingQueue = "building_queue_" + buildingName;
         channel.queueDeclare(buildingQueue, false, false, false, null);
-        channel.queueBind(buildingQueue, EXCHANGE_DIRECT, buildingName);  // Bind queue to receive messages from the agent
+        channel.queueBind(buildingQueue, EXCHANGE_DIRECT, buildingName);
+        channel.queueBind(buildingQueue, EXCHANGE_FANOUT, buildingName);
 
         announceBuilding();  // Broadcast building's existence
         listenForAgentRequests(buildingQueue);  // Listen for requests from agents
@@ -78,7 +79,7 @@ public class Building {
     private void handleAgentRequest(BuildingMessage message) throws IOException {
         System.out.println("Processing request of type: " + message.getType());
         switch (message.getType()) {
-            case BUILDING_STATUS -> sendStatusToAllAgents();  // Send current status to all agents
+            case REQUEST_BUILDING_STATUS -> sendStatusToAllAgents();  // Отправляем статус всем агентам
             case BOOK -> processBookingRequest(message);  // Process booking request
             case CANCEL -> processCancellationRequest(message);  // Process cancellation request
             case ERROR -> System.out.println("Error received: " + message.getErrorMessage());  // Handle errors
