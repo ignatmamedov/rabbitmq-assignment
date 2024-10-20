@@ -66,20 +66,18 @@ public class Client {
         boolean running = true;
 
         while (running) {
-            System.out.println("Conference Room Booking System");
-            System.out.println("1. Request list of buildings");
-            System.out.println("2. Request your reservations");
-            System.out.println("3. Exit");
-            System.out.print("Choose an option: ");
-
-            int choice = scanner.nextInt();
-            scanner.nextLine();
+            String[] mainMenuOptions = {
+                    "1. Request list of buildings",
+                    "2. Request your reservations",
+                    "3. Exit"
+            };
+            int choice = displayMenuAndGetChoice("Conference Room Booking System", mainMenuOptions, 1, 3);
 
             switch (choice) {
                 case 1 -> requestListOfBuildings();
                 case 2 -> requestListOfReservations();
                 case 3 -> running = false;
-                default -> System.out.println("Invalid choice. Please try again.");
+                default -> System.out.println("Invalid choice. Please try again."); // Should not reach here due to validation
             }
         }
     }
@@ -100,7 +98,7 @@ public class Client {
 
     private void startMessageProcessor() throws Exception {
         isNewMessageExpected = true;
-        while (isNewMessageExpected){
+        while (isNewMessageExpected) {
             waitResponse();
             switch (responseMessage.getType()) {
                 case LIST_BUILDINGS -> processBuildingList(responseMessage);
@@ -130,30 +128,26 @@ public class Client {
     }
 
     private void processBuildingList(ClientRequestMessage response) {
-        System.out.println("Available Buildings: " + response.getBuildingNames());
-        for (String building:response.getBuildingNames()){
-            System.out.println(building + " rooms: " + response.getRooms(building));
+        Map<String, ArrayList<Integer>> buildings = response.getBuildings();
+        System.out.println("Available Buildings and Rooms:");
+        for (String building : buildings.keySet()) {
+            System.out.println("- " + building + " rooms: " + buildings.get(building));
         }
-        System.out.println("1. Book a room");
-        System.out.println("2. Exit");
-        System.out.print("Choose an option: ");
-        int bookingChoice = scanner.nextInt();
-        scanner.nextLine();
+
+        String[] options = {
+                "1. Book rooms",
+                "2. Exit"
+        };
+        int bookingChoice = displayMenuAndGetChoice(null, options, 1, 2);
 
         if (bookingChoice == 1) {
-            System.out.print("Enter building name: ");
-            String building = scanner.nextLine();
-
-            System.out.print("Enter room number: ");
-            int room = scanner.nextInt();
-            scanner.nextLine();
+            String building = getValidBuilding(buildings);
+            List<Integer> rooms = getValidRooms(buildings.get(building), building);
 
             try {
                 ClientRequestMessage bookingRequest = new ClientRequestMessage(clientId, ClientRequestType.BOOK);
                 Map<String, ArrayList<Integer>> bookingRooms = new HashMap<>();
-                ArrayList<Integer> rooms = new ArrayList<>();
-                rooms.add(room);
-                bookingRooms.put(building, rooms);
+                bookingRooms.put(building, new ArrayList<>(rooms));
                 bookingRequest.setBuildings(bookingRooms);
 
                 String message = objectMapper.writeValueAsString(bookingRequest);
@@ -174,15 +168,16 @@ public class Client {
     }
 
     private void processBooking(ClientRequestMessage response) {
-        System.out.printf("Are you sure you want to book rooms %d in building %s? Confirmation number: %s%n",
-                response.getRooms(response.getBuildingNames().get(0)), response.getBuildingNames().get(0), response.getReservationNumber());
+        String building = response.getBuildingNames().get(0);
+        ArrayList<Integer> rooms = response.getRooms(building);
+        System.out.printf("Are you sure you want to book room(s) %s in building %s? Confirmation number: %s%n",
+                rooms, building, response.getReservationNumber());
 
-        System.out.println("1. Confirm booking");
-        System.out.println("2. Exit");
-        System.out.print("Choose an option: ");
-
-        int userChoice = scanner.nextInt();
-        scanner.nextLine();
+        String[] options = {
+                "1. Confirm booking",
+                "2. Exit"
+        };
+        int userChoice = displayMenuAndGetChoice(null, options, 1, 2);
 
         if (userChoice == 1) {
             try {
@@ -220,23 +215,31 @@ public class Client {
             return;
         }
 
-        System.out.println("Your reservations:");
         String[] reservations = reservationList.split(",");
-        for (int i = 0; i < reservations.length; i++) {
-            System.out.printf("%d. Reservation confirmation number: %s%n", i + 1, reservations[i]);
+        Set<String> reservationSet = new HashSet<>(Arrays.asList(reservations));
+
+        System.out.println("Your reservations:");
+        for (String res : reservations) {
+            System.out.printf("- Reservation confirmation number: %s%n", res);
         }
 
-        System.out.println("1. Cancel a reservation");
-        System.out.println("2. Exit");
-        System.out.print("Choose an option: ");
-
-        int userChoice = scanner.nextInt();
-        scanner.nextLine();
+        String[] options = {
+                "1. Cancel a reservation",
+                "2. Exit"
+        };
+        int userChoice = displayMenuAndGetChoice(null, options, 1, 2);
 
         if (userChoice == 1) {
-            System.out.print("Enter the number of the reservation you want to cancel: ");
-            String reservationToCancel = scanner.next();
-            scanner.nextLine();
+            String reservationToCancel;
+            while (true) {
+                System.out.print("Enter the reservation confirmation number you want to cancel: ");
+                reservationToCancel = scanner.nextLine();
+                if (reservationSet.contains(reservationToCancel)) {
+                    break;
+                } else {
+                    System.out.println("Invalid reservation number. Please enter a valid reservation confirmation number.");
+                }
+            }
 
             ClientRequestMessage cancelMessage = new ClientRequestMessage(clientId, ClientRequestType.CANCEL);
             cancelMessage.setReservationNumber(reservationToCancel);
@@ -261,5 +264,107 @@ public class Client {
             System.out.println("An unknown error occurred.");
         }
         isNewMessageExpected = false;
+    }
+
+    // Helper method to display a menu and get user's choice
+    private int displayMenuAndGetChoice(String header, String[] options, int min, int max) {
+        if (header != null) {
+            System.out.println(header);
+        }
+        for (String option : options) {
+            System.out.println(option);
+        }
+        System.out.print("Choose an option: ");
+        return readIntInput(min, max);
+    }
+
+    // Helper method to read integer input within a range
+    private int readIntInput(int min, int max) {
+        int choice;
+        while (true) {
+            try {
+                choice = Integer.parseInt(scanner.nextLine());
+                if (choice >= min && choice <= max) {
+                    break;
+                } else {
+                    System.out.printf("Please enter a number between %d and %d.%n", min, max);
+                    System.out.print("Choose an option: ");
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid input. Please enter a number.");
+                System.out.print("Choose an option: ");
+            }
+        }
+        return choice;
+    }
+
+    // Overloaded method to include custom prompt
+    private int readIntInput(String prompt, int min, int max) {
+        int choice;
+        while (true) {
+            try {
+                System.out.print(prompt);
+                choice = Integer.parseInt(scanner.nextLine());
+                if (choice >= min && choice <= max) {
+                    break;
+                } else {
+                    System.out.printf("Please enter a number between %d and %d.%n", min, max);
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid input. Please enter a number.");
+            }
+        }
+        return choice;
+    }
+
+    // Helper method to get a valid building from the user
+    private String getValidBuilding(Map<String, ArrayList<Integer>> buildings) {
+        String building;
+        while (true) {
+            System.out.print("Enter building name: ");
+            building = scanner.nextLine();
+            if (buildings.containsKey(building)) {
+                break;
+            } else {
+                System.out.println("Invalid building name. Please choose from the available buildings.");
+            }
+        }
+        return building;
+    }
+
+    // Helper method to get valid room numbers from the user
+    private List<Integer> getValidRooms(ArrayList<Integer> availableRooms, String building) {
+        List<Integer> rooms = new ArrayList<>();
+        while (true) {
+            System.out.print("Enter room numbers separated by commas: ");
+            String input = scanner.nextLine();
+            String[] roomStrings = input.split(",");
+            boolean allValid = true;
+            rooms.clear();
+
+            for (String roomStr : roomStrings) {
+                try {
+                    int room = Integer.parseInt(roomStr.trim());
+                    if (availableRooms.contains(room)) {
+                        rooms.add(room);
+                    } else {
+                        System.out.printf("Room number %d is not available in %s.%n", room, building);
+                        allValid = false;
+                        break;
+                    }
+                } catch (NumberFormatException e) {
+                    System.out.printf("Invalid room number: %s%n", roomStr.trim());
+                    allValid = false;
+                    break;
+                }
+            }
+
+            if (allValid && !rooms.isEmpty()) {
+                break;
+            } else {
+                System.out.println("Please enter valid room numbers from the available rooms in " + building + ": " + availableRooms);
+            }
+        }
+        return rooms;
     }
 }
