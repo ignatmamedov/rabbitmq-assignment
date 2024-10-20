@@ -11,21 +11,25 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class Agent {
+    private static final int TIMEOUT = 1000;
     private static final String EXCHANGE_CLIENT = "client_exchange";
     private static final String EXCHANGE_DIRECT = "direct_exchange";
     private static final String EXCHANGE_FANOUT = "building_announce_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
     private static final String AGENT_QUEUE_NAME = "agent_to_building_queue_" + UUID.randomUUID();
-
     private static final Map<String, List<ClientMessage>> reservations = new ConcurrentHashMap<>();
     private static final Map<String, ClientMessage> unconfirmedReservations = new ConcurrentHashMap<>();
     private static final Map<String, Set<Integer>> availableRooms = new ConcurrentHashMap<>();
 
     private static final Map<String, Long> buildingTimestamps = new ConcurrentHashMap<>();
 
-    private static final int TIMEOUT = 1000;
+    private static final Lock lock = new ReentrantLock();
+    private static final Condition roomsAvailable = lock.newCondition();
 
     private static Channel channel;
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -54,11 +58,13 @@ public class Agent {
 
         requestBuildingStatusFromAll();
 
-        listenForClientRequests();
-
         listenForBuildingMessages();
 
         removeInactiveBuildings();
+
+        waitForAvailableRooms();
+
+        listenForClientRequests();
     }
 
     private void requestBuildingStatusFromAll() throws IOException {
@@ -119,10 +125,31 @@ public class Agent {
         }, consumerTag -> {});
     }
 
+    private void waitForAvailableRooms() {
+        lock.lock();
+        try {
+            while (availableRooms.isEmpty()) {
+                System.out.println("Waiting for available rooms...");
+                roomsAvailable.await();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            lock.unlock();
+        }
+        System.out.println("Available rooms detected, starting to listen for client requests...");
+    }
+
     private void updateBuildingStatus(BuildingMessage buildingMessage) {
-        availableRooms.put(buildingMessage.getBuildingName(), new HashSet<>(buildingMessage.getAvailableRooms()));
-        buildingTimestamps.put(buildingMessage.getBuildingName(), System.currentTimeMillis());
-        System.out.println("Updated available rooms for building: " + buildingMessage.getBuildingName());
+        lock.lock();
+        try {
+            availableRooms.put(buildingMessage.getBuildingName(), new HashSet<>(buildingMessage.getAvailableRooms()));
+            buildingTimestamps.put(buildingMessage.getBuildingName(), System.currentTimeMillis());
+            System.out.println("Updated available rooms for building: " + buildingMessage.getBuildingName());
+            roomsAvailable.signalAll();
+        } finally {
+            lock.unlock();
+        }
     }
 
     private void handleBookResponse(BuildingMessage buildingMessage) {
