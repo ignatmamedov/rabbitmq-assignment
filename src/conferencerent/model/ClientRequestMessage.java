@@ -1,16 +1,19 @@
 package conferencerent.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.ArrayList;
-import java.util.UUID;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ClientRequestMessage {
     private String clientId;
     private ClientRequestType type;
-    private String building;
-    private ArrayList<Integer> rooms;
+    @JsonProperty("buildings")
+    private Map<String, ArrayList<Integer>> buildings;
     private String reservationNumber;
 
     private String errorMessage;
@@ -24,41 +27,37 @@ public class ClientRequestMessage {
     }
 
     public ClientRequestMessage() {
-        this.rooms = new ArrayList<>();
+        this.buildings = new HashMap<>();
     }
 
     public ClientRequestMessage(String clientId, ClientRequestType type) {
         this.clientId = clientId;
         this.type = type;
-        this.rooms = new ArrayList<>();
+        this.buildings = new HashMap<>();
     }
 
     public ClientRequestType getType() {
         return type;
     }
 
-    public void setType(ClientRequestType type) {
-        this.type = type;
-    }
-
     public String getClientId(){
         return clientId;
     }
 
-    public String getBuilding() {
-        return building;
+    public ArrayList<Integer> getRooms(String building) {
+        return this.buildings.get(building);
     }
 
-    public void setBuilding(String building) {
-        this.building = building;
+    public Map<String, ArrayList<Integer>> getBuildings() {
+        return buildings;
     }
 
-    public ArrayList<Integer> getRooms() {
-        return this.rooms;
+    public void setBuildings(Map<String, ArrayList<Integer>> buildings){
+        this.buildings = buildings;
     }
 
-    public void setRoom(ArrayList<Integer> rooms) {
-        this.rooms = rooms;
+    public ArrayList<String> getBuildingNames() {
+        return new ArrayList<>(buildings.keySet());
     }
 
     public String getReservationNumber() {

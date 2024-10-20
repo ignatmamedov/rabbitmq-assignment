@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -71,17 +72,24 @@ public class Agent {
     }
 
     private void sendBuildingList(String clientId) throws IOException {
-        String buildingsInfo = "Building A: 101, 102\nBuilding B: 201, 202";
 
         ClientRequestMessage responseMessage = new ClientRequestMessage(clientId, ClientRequestType.LIST_BUILDINGS);
-        responseMessage.setBuilding(buildingsInfo);
-
+        Map<String, ArrayList<Integer>> bookingRooms = new HashMap<>();
+        ArrayList<Integer> roomsA = new ArrayList<>();
+        roomsA.add(101);
+        roomsA.add(102);
+        bookingRooms.put("Building A", roomsA);
+        ArrayList<Integer> roomsB = new ArrayList<>();
+        roomsB.add(201);
+        roomsB.add(202);
+        bookingRooms.put("Building B", roomsB);
+        responseMessage.setBuildings(bookingRooms);
         sendResponse(responseMessage);
     }
 
     private void sendReservationNumber(ClientRequestMessage requestMessage) throws IOException {
         String reservationId = UUID.randomUUID().toString();
-        reservations.put(reservationId, "Building: " + requestMessage.getBuilding() + ", Rooms: " + requestMessage.getRooms());
+        reservations.put(reservationId, "Building: " + requestMessage.getBuildingNames().get(0) + ", Rooms: " + requestMessage.getRooms(requestMessage.getBuildingNames().get(0)));
 
         ClientRequestMessage responseMessage = new ClientRequestMessage(requestMessage.getClientId(), ClientRequestType.BOOK);
         responseMessage.setReservationNumber(reservationId);

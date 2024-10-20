@@ -10,9 +10,7 @@ import org.codehaus.jackson.map.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Scanner;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -132,7 +130,10 @@ public class Client {
     }
 
     private void processBuildingList(ClientRequestMessage response) {
-        System.out.println("Available Buildings: " + response.getBuilding());
+        System.out.println("Available Buildings: " + response.getBuildingNames());
+        for (String building:response.getBuildingNames()){
+            System.out.println(building + " rooms: " + response.getRooms(building));
+        }
         System.out.println("1. Book a room");
         System.out.println("2. Exit");
         System.out.print("Choose an option: ");
@@ -149,10 +150,12 @@ public class Client {
 
             try {
                 ClientRequestMessage bookingRequest = new ClientRequestMessage(clientId, ClientRequestType.BOOK);
-                bookingRequest.setBuilding(building);
+                Map<String, ArrayList<Integer>> bookingRooms = new HashMap<>();
                 ArrayList<Integer> rooms = new ArrayList<>();
                 rooms.add(room);
-                bookingRequest.setRoom(rooms);
+                bookingRooms.put(building, rooms);
+                bookingRequest.setBuildings(bookingRooms);
+
                 String message = objectMapper.writeValueAsString(bookingRequest);
                 channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes());
             } catch (Exception e) {
@@ -172,7 +175,7 @@ public class Client {
 
     private void processBooking(ClientRequestMessage response) {
         System.out.printf("Are you sure you want to book rooms %d in building %s? Confirmation number: %s%n",
-                response.getRooms().toString(), response.getBuilding(), response.getReservationNumber());
+                response.getRooms(response.getBuildingNames().get(0)), response.getBuildingNames().get(0), response.getReservationNumber());
 
         System.out.println("1. Confirm booking");
         System.out.println("2. Exit");
