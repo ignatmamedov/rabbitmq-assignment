@@ -15,6 +15,12 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * The Agent class acts as a mediator between clients and buildings.
+ * It handles client requests for booking conference rooms,
+ * communicates with buildings to update room availability,
+ * and manages reservations.
+ */
 public class Agent {
     private static final int TIMEOUT = 1000;
     private static final String EXCHANGE_CLIENT = "client_exchange";
@@ -23,7 +29,6 @@ public class Agent {
     private static final String EXCHANGE_REPLICATION = "replication_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
     private static final String AGENT_QUEUE_NAME = "agent_to_building_queue_" + UUID.randomUUID();
-
     private final Map<String, List<ClientMessage>> reservations = new ConcurrentHashMap<>();
     private final Map<String, ClientMessage> unconfirmedReservations = new ConcurrentHashMap<>();
     private final Map<String, Set<Integer>> availableRooms = new ConcurrentHashMap<>();
@@ -34,10 +39,22 @@ public class Agent {
     private Channel channel;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * The main method to run the Agent.
+     *
+     * @param args command-line arguments
+     * @throws Exception if an error occurs during execution
+     */
     public static void main(String[] args) throws Exception {
         new Agent().run();
     }
 
+    /**
+     * Runs the agent by initializing connections, setting up listeners,
+     * and handling client and building messages.
+     *
+     * @throws Exception if an error occurs during execution
+     */
     public void run() throws Exception {
         initialize();
         listenForReplicationMessages();
@@ -48,6 +65,11 @@ public class Agent {
         listenForClientRequests();
     }
 
+    /**
+     * Initializes the RabbitMQ connections, exchanges, and queues.
+     *
+     * @throws Exception if an error occurs during initialization
+     */
     private void initialize() throws Exception {
         objectMapper.configure(DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT, true);
         ConnectionFactory factory = new ConnectionFactory();
@@ -57,6 +79,11 @@ public class Agent {
         declareExchangesAndQueues();
     }
 
+    /**
+     * Declares the necessary exchanges and queues for communication.
+     *
+     * @throws IOException if an error occurs during declaration
+     */
     private void declareExchangesAndQueues() throws IOException {
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
         channel.exchangeDeclare(EXCHANGE_FANOUT, BuiltinExchangeType.FANOUT);
@@ -70,6 +97,11 @@ public class Agent {
         channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_FANOUT, "");
     }
 
+    /**
+     * Requests the status of all buildings by broadcasting a message.
+     *
+     * @throws IOException if an error occurs during publishing
+     */
     private void requestBuildingStatusFromAll() throws IOException {
         BuildingMessage request = new BuildingMessage();
         request.setType(MessageType.REQUEST_BUILDING_STATUS);
@@ -79,10 +111,21 @@ public class Agent {
         );
     }
 
+    /**
+     * Starts listening for client requests.
+     *
+     * @throws IOException if an error occurs during consuming messages
+     */
     private void listenForClientRequests() throws IOException {
         channel.basicConsume(CLIENT_AGENT_QUEUE, true, this::handleClientRequest, consumerTag -> {});
     }
 
+    /**
+     * Handles incoming client requests and dispatches them to appropriate methods.
+     *
+     * @param consumerTag the consumer tag
+     * @param delivery    the message delivery
+     */
     private void handleClientRequest(String consumerTag, Delivery delivery) {
         String jsonRequest = new String(delivery.getBody(), StandardCharsets.UTF_8);
         try {
@@ -99,10 +142,21 @@ public class Agent {
         }
     }
 
+    /**
+     * Starts listening for building messages.
+     *
+     * @throws IOException if an error occurs during consuming messages
+     */
     private void listenForBuildingMessages() throws IOException {
         channel.basicConsume(AGENT_QUEUE_NAME, true, this::handleBuildingMessage, consumerTag -> {});
     }
 
+    /**
+     * Handles incoming messages from buildings and updates room availability.
+     *
+     * @param consumerTag the consumer tag
+     * @param delivery    the message delivery
+     */
     private void handleBuildingMessage(String consumerTag, Delivery delivery) {
         String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
         try {
@@ -115,6 +169,9 @@ public class Agent {
         }
     }
 
+    /**
+     * Waits until rooms are available before proceeding.
+     */
     private void waitForAvailableRooms() {
         lock.lock();
         try {
@@ -128,6 +185,11 @@ public class Agent {
         }
     }
 
+    /**
+     * Updates the available rooms and timestamps for a building.
+     *
+     * @param buildingMessage the building message containing the status
+     */
     private void updateBuildingStatus(BuildingMessage buildingMessage) {
         lock.lock();
         try {
@@ -141,6 +203,12 @@ public class Agent {
         }
     }
 
+    /**
+     * Sends the list of available buildings and rooms to the client.
+     *
+     * @param clientId the client's unique identifier
+     * @throws IOException if an error occurs during publishing
+     */
     private void sendBuildingList(String clientId) throws IOException {
         ClientMessage responseMessage = new ClientMessage(clientId, MessageType.LIST_BUILDINGS);
         Map<String, ArrayList<Integer>> bookingRooms = new HashMap<>();
@@ -149,6 +217,12 @@ public class Agent {
         sendResponse(clientId, responseMessage);
     }
 
+    /**
+     * Processes a booking request from a client.
+     *
+     * @param requestMessage the client's booking request
+     * @throws IOException if an error occurs during processing
+     */
     private void processBookingRequest(ClientMessage requestMessage) throws IOException {
         String clientId = requestMessage.getClientId();
         Map<String, ArrayList<Integer>> requestedRooms = requestMessage.getBuildings();
@@ -166,6 +240,12 @@ public class Agent {
         replicateUnconfirmedBooking(requestMessage);
     }
 
+    /**
+     * Checks if the requested rooms are available.
+     *
+     * @param requestedRooms the rooms requested by the client
+     * @return true if all requested rooms are available; false otherwise
+     */
     private boolean areRoomsAvailable(Map<String, ArrayList<Integer>> requestedRooms) {
         for (Map.Entry<String, ArrayList<Integer>> entry : requestedRooms.entrySet()) {
             Set<Integer> available = availableRooms.get(entry.getKey());
@@ -176,6 +256,12 @@ public class Agent {
         return true;
     }
 
+    /**
+     * Confirms a booking for a client.
+     *
+     * @param requestMessage the client's confirmation request
+     * @throws IOException if an error occurs during processing
+     */
     private void confirmBooking(ClientMessage requestMessage) throws IOException {
         String reservationNumber = requestMessage.getReservationNumber();
         String clientId = requestMessage.getClientId();
@@ -201,6 +287,11 @@ public class Agent {
         }
     }
 
+    /**
+     * Updates the available rooms by removing the booked rooms.
+     *
+     * @param rooms the rooms that have been booked
+     */
     private void updateAvailableRooms(Map<String, ArrayList<Integer>> rooms) {
         rooms.forEach((building, roomList) -> {
             Set<Integer> available = availableRooms.get(building);
@@ -210,6 +301,12 @@ public class Agent {
         });
     }
 
+    /**
+     * Cancels a reservation for a client.
+     *
+     * @param requestMessage the client's cancellation request
+     * @throws IOException if an error occurs during processing
+     */
     private void cancelReservation(ClientMessage requestMessage) throws IOException {
         String reservationNumber = requestMessage.getReservationNumber();
         String clientId = requestMessage.getClientId();
@@ -233,6 +330,11 @@ public class Agent {
         sendError(clientId, "Reservation not found or already canceled.");
     }
 
+    /**
+     * Updates the available rooms by adding back the canceled rooms.
+     *
+     * @param rooms the rooms that have been canceled
+     */
     private void updateAvailableRoomsAfterCancellation(Map<String, ArrayList<Integer>> rooms) {
         rooms.forEach(
                 (building, roomList) -> availableRooms.computeIfAbsent(
@@ -240,6 +342,13 @@ public class Agent {
         );
     }
 
+    /**
+     * Sends a booking or cancellation request to a building.
+     *
+     * @param clientMessage the client's booking or cancellation message
+     * @param type          the type of message (BOOK or CANCEL)
+     * @throws IOException if an error occurs during publishing
+     */
     private void sendBookingRequestToBuilding(ClientMessage clientMessage, MessageType type) throws IOException {
         BuildingMessage request = new BuildingMessage();
         request.setType(type);
@@ -252,6 +361,12 @@ public class Agent {
         );
     }
 
+    /**
+     * Lists all reservations for a client.
+     *
+     * @param clientId the client's unique identifier
+     * @throws IOException if an error occurs during publishing
+     */
     private void listReservations(String clientId) throws IOException {
         List<ClientMessage> clientReservations = reservations.get(clientId);
         ClientMessage responseMessage = new ClientMessage(clientId, MessageType.LIST_RESERVATIONS);
@@ -265,6 +380,13 @@ public class Agent {
         sendResponse(clientId, responseMessage);
     }
 
+    /**
+     * Sends a response message to a client.
+     *
+     * @param clientId       the client's unique identifier
+     * @param responseMessage the response message to send
+     * @throws IOException if an error occurs during publishing
+     */
     private void sendResponse(String clientId, ClientMessage responseMessage) throws IOException {
         String message = objectMapper.writeValueAsString(responseMessage);
         channel.basicPublish(
@@ -272,12 +394,22 @@ public class Agent {
         );
     }
 
+    /**
+     * Sends an error message to a client.
+     *
+     * @param clientId     the client's unique identifier
+     * @param errorMessage the error message to send
+     * @throws IOException if an error occurs during publishing
+     */
     private void sendError(String clientId, String errorMessage) throws IOException {
         ClientMessage errorMessageObj = new ClientMessage(clientId, MessageType.ERROR);
         errorMessageObj.setErrorMessage(errorMessage);
         sendResponse(clientId, errorMessageObj);
     }
 
+    /**
+     * Periodically removes buildings that have not sent status updates within the timeout period.
+     */
     private void removeInactiveBuildings() {
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
             long currentTime = System.currentTimeMillis();
@@ -295,6 +427,12 @@ public class Agent {
         }, TIMEOUT, TIMEOUT, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Requests the status of a specific building.
+     *
+     * @param buildingName the name of the building
+     * @throws IOException if an error occurs during publishing
+     */
     private void requestBuildingStatus(String buildingName) throws IOException {
         BuildingMessage request = new BuildingMessage();
         request.setType(MessageType.REQUEST_BUILDING_STATUS);
@@ -305,6 +443,12 @@ public class Agent {
         );
     }
 
+    /**
+     * Replicates a confirmed booking to other agents.
+     *
+     * @param bookingMessage the booking message to replicate
+     * @throws IOException if an error occurs during publishing
+     */
     private void replicateBooking(ClientMessage bookingMessage) throws IOException {
         String message = objectMapper.writeValueAsString(bookingMessage);
         channel.basicPublish(
@@ -312,6 +456,12 @@ public class Agent {
         );
     }
 
+    /**
+     * Replicates an unconfirmed booking to other agents.
+     *
+     * @param bookingMessage the booking message to replicate
+     * @throws IOException if an error occurs during publishing
+     */
     private void replicateUnconfirmedBooking(ClientMessage bookingMessage) throws IOException {
         bookingMessage.setType(MessageType.BOOK);
         String message = objectMapper.writeValueAsString(bookingMessage);
@@ -320,6 +470,11 @@ public class Agent {
         );
     }
 
+    /**
+     * Starts listening for replication messages from other agents.
+     *
+     * @throws IOException if an error occurs during consuming messages
+     */
     private void listenForReplicationMessages() throws IOException {
         String replicationQueue = "replication_queue_" + UUID.randomUUID();
         channel.queueDeclare(replicationQueue, false, false, true, null);
@@ -327,6 +482,12 @@ public class Agent {
         channel.basicConsume(replicationQueue, true, this::handleReplicationMessage, consumerTag -> {});
     }
 
+    /**
+     * Handles incoming replication messages to synchronize bookings across agents.
+     *
+     * @param consumerTag the consumer tag
+     * @param delivery    the message delivery
+     */
     private void handleReplicationMessage(String consumerTag, Delivery delivery) {
         String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
         try {

@@ -7,6 +7,10 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
 
+/**
+ * Represents a message exchanged between the client and the agent.
+ * Contains information about buildings, reservations, and error messages.
+ */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ClientMessage {
     private String clientId;
@@ -16,9 +20,18 @@ public class ClientMessage {
     private String reservationNumber;
     private String errorMessage;
 
+    /**
+     * Default constructor.
+     */
     public ClientMessage() {
     }
 
+    /**
+     * Constructs a ClientMessage with a client ID and message type.
+     *
+     * @param clientId the client's unique identifier
+     * @param type     the type of the message
+     */
     public ClientMessage(String clientId, MessageType type) {
         this.clientId = clientId;
         this.type = type;

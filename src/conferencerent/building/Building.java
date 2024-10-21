@@ -9,6 +9,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
+/**
+ * The Building class represents a conference building with rooms.
+ * It handles booking and cancellation requests from the agent
+ * and keeps track of available rooms.
+ */
 public class Building {
     private static final String EXCHANGE_DIRECT = "direct_exchange";
     private static final String EXCHANGE_FANOUT = "building_announce_exchange";
@@ -17,16 +22,27 @@ public class Building {
     private Channel channel;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * Constructs a Building instance with a name and a set of rooms.
+     *
+     * @param buildingName the name of the building
+     * @param rooms        the set of room numbers available in the building
+     */
     public Building(String buildingName, Set<Integer> rooms) {
         this.buildingName = buildingName;
         this.availableRooms = Collections.synchronizedSet(new HashSet<>(rooms));
     }
 
-    public static void main(String[] args){
+    /**
+     * The main method to run multiple building instances.
+     *
+     * @param args command-line arguments
+     */
+    public static void main(String[] args) {
         List<Building> buildings = Arrays.asList(
-                new Building("Building A", Set.of(101, 102, 103)),
-                new Building("Building B", Set.of(201, 202, 203)),
-                new Building("Building C", Set.of(301, 302, 303))
+                new Building("Building O", Set.of(101, 102, 103)),
+                new Building("Building R", Set.of(201, 202, 203)),
+                new Building("Building D", Set.of(301, 302, 303))
         );
         for (Building building : buildings) {
             new Thread(() -> {
@@ -39,12 +55,23 @@ public class Building {
         }
     }
 
+    /**
+     * Runs the building by setting up connections, announcing its status,
+     * and handling requests from the agent.
+     *
+     * @throws Exception if an error occurs during execution
+     */
     public void run() throws Exception {
         setupConnection();
         announceBuilding();
         listenForAgentRequests();
     }
 
+    /**
+     * Sets up the RabbitMQ connections and declares necessary exchanges and queues.
+     *
+     * @throws Exception if an error occurs during setup
+     */
     private void setupConnection() throws Exception {
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost("localhost");
@@ -58,15 +85,31 @@ public class Building {
         channel.queueBind(buildingQueue, EXCHANGE_FANOUT, buildingName);
     }
 
+    /**
+     * Announces the building's status to all agents.
+     *
+     * @throws IOException if an error occurs during publishing
+     */
     private void announceBuilding() throws IOException {
         sendStatusToAllAgents();
     }
 
+    /**
+     * Starts listening for requests from agents.
+     *
+     * @throws IOException if an error occurs during consuming messages
+     */
     private void listenForAgentRequests() throws IOException {
         String buildingQueue = "building_queue_" + buildingName;
         channel.basicConsume(buildingQueue, true, this::handleAgentRequest, consumerTag -> {});
     }
 
+    /**
+     * Handles incoming requests from agents and processes them accordingly.
+     *
+     * @param consumerTag the consumer tag
+     * @param delivery    the message delivery
+     */
     private void handleAgentRequest(String consumerTag, Delivery delivery) {
         String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
         try {
@@ -81,6 +124,11 @@ public class Building {
         }
     }
 
+    /**
+     * Sends the current status of the building to all agents.
+     *
+     * @throws IOException if an error occurs during publishing
+     */
     private void sendStatusToAllAgents() throws IOException {
         BuildingMessage statusMessage = new BuildingMessage();
         statusMessage.setType(MessageType.BUILDING_STATUS);
@@ -90,6 +138,12 @@ public class Building {
         channel.basicPublish(EXCHANGE_FANOUT, "", null, message.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * Processes a booking request from the agent.
+     *
+     * @param request the booking request message
+     * @throws IOException if an error occurs during processing
+     */
     private void processBookingRequest(BuildingMessage request) throws IOException {
         List<Integer> requestedRooms = request.getRequestedRooms();
         if (availableRooms.containsAll(requestedRooms)) {
@@ -98,6 +152,12 @@ public class Building {
         sendStatusToAllAgents();
     }
 
+    /**
+     * Processes a cancellation request from the agent.
+     *
+     * @param request the cancellation request message
+     * @throws IOException if an error occurs during processing
+     */
     private void processCancellationRequest(BuildingMessage request) throws IOException {
         availableRooms.addAll(request.getRequestedRooms());
         sendStatusToAllAgents();

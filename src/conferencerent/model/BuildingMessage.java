@@ -4,6 +4,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
 
+/**
+ * Represents a message exchanged between the building and the agent.
+ * Contains information about building status, available rooms, and requested rooms.
+ */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class BuildingMessage {
     private MessageType type;

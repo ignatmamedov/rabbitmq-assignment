@@ -17,6 +17,11 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * The Client class allows users to interact with the booking system.
+ * Users can request building lists, make reservations, confirm bookings,
+ * and cancel reservations.
+ */
 public class Client {
     private final String clientId = UUID.randomUUID().toString();
     private final static String EXCHANGE_CLIENT = "client_exchange";
@@ -34,10 +39,21 @@ public class Client {
 
     ClientMessage responseMessage = null;
 
+    /**
+     * The main method to run the client application.
+     *
+     * @param args command-line arguments
+     * @throws Exception if an error occurs during execution
+     */
     public static void main(String[] args) throws Exception {
         new Client().run();
     }
 
+    /**
+     * Runs the client by setting up connections and starting the booking process.
+     *
+     * @throws Exception if an error occurs during execution
+     */
     public void run() throws Exception {
         setupChannel();
 
@@ -48,6 +64,12 @@ public class Client {
         connection.close();
     }
 
+    /**
+     * Sets up the RabbitMQ channel and declares necessary exchanges and queues.
+     *
+     * @throws IOException      if an error occurs during setup
+     * @throws TimeoutException if a timeout occurs during connection
+     */
     private void setupChannel() throws IOException, TimeoutException {
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost("localhost");
@@ -65,6 +87,11 @@ public class Client {
         channel.queueBind(clientQueueName, EXCHANGE_CLIENT, clientId);
     }
 
+    /**
+     * Starts the booking process by displaying menus and handling user input.
+     *
+     * @throws Exception if an error occurs during execution
+     */
     private void startBooking() throws Exception {
         boolean running = true;
 
@@ -87,6 +114,11 @@ public class Client {
         }
     }
 
+    /**
+     * Starts a thread to monitor responses from the agent.
+     *
+     * @throws Exception if an error occurs during setup
+     */
     private void startResponseMonitor() throws Exception {
         String clientQueueName = "agent_to_client_queue_" + clientId;
         channel.basicConsume(clientQueueName, true, (consumerTag, delivery) -> {
@@ -102,6 +134,11 @@ public class Client {
         }, consumerTag -> {});
     }
 
+    /**
+     * Starts processing incoming messages from the agent.
+     *
+     * @throws Exception if an error occurs during processing
+     */
     private void startMessageProcessor() throws Exception {
         isNewMessageExpected = true;
         while (isNewMessageExpected) {
@@ -121,6 +158,11 @@ public class Client {
         }
     }
 
+    /**
+     * Waits for a response message from the agent.
+     *
+     * @throws Exception if an error occurs during waiting
+     */
     private void waitResponse() throws Exception {
         lock.lock();
         try {
@@ -133,6 +175,11 @@ public class Client {
         }
     }
 
+    /**
+     * Processes the building list received from the agent.
+     *
+     * @param response the response message containing the building list
+     */
     private void processBuildingList(ClientMessage response) {
         Map<String, ArrayList<Integer>> buildings = response.getBuildings();
         System.out.println("Available Buildings and Rooms:");
@@ -165,12 +212,22 @@ public class Client {
         }
     }
 
+    /**
+     * Requests the list of buildings from the agent.
+     *
+     * @throws Exception if an error occurs during sending
+     */
     private void requestListOfBuildings() throws Exception {
         ClientMessage requestMessage = new ClientMessage(clientId, MessageType.LIST_BUILDINGS);
         sendMessageToAgent(requestMessage);
         startMessageProcessor();
     }
 
+    /**
+     * Processes the booking response from the agent.
+     *
+     * @param response the response message containing the booking details
+     */
     private void processBooking(ClientMessage response) {
         String building = response.getBuildingNames().get(0);
         ArrayList<Integer> rooms = response.getRooms(building);
@@ -197,18 +254,34 @@ public class Client {
         }
     }
 
+    /**
+     * Processes the booking confirmation from the agent.
+     *
+     * @param response the response message confirming the booking
+     */
     private void processBookingConfirmation(ClientMessage response) {
         System.out.printf("Booking with confirmation number %s has been successfully confirmed.%n",
                 response.getReservationNumber());
         isNewMessageExpected = false;
     }
 
+    /**
+     * Requests the list of reservations from the agent.
+     *
+     * @throws Exception if an error occurs during sending
+     */
     private void requestListOfReservations() throws Exception {
         ClientMessage requestMessage = new ClientMessage(clientId, MessageType.LIST_RESERVATIONS);
         sendMessageToAgent(requestMessage);
         startMessageProcessor();
     }
 
+    /**
+     * Processes the reservation list received from the agent.
+     *
+     * @param response the response message containing the reservation list
+     * @throws IOException if an error occurs during processing
+     */
     private void processReservationList(ClientMessage response) throws IOException {
         String reservationList = response.getReservationNumber();
         if (reservationList == null || reservationList.isEmpty()) {
@@ -253,12 +326,22 @@ public class Client {
         }
     }
 
+    /**
+     * Processes the cancellation confirmation from the agent.
+     *
+     * @param response the response message confirming the cancellation
+     */
     private void processCancelReservation(ClientMessage response) {
         System.out.printf("Reservation with confirmation number %s has been successfully cancelled.%n",
                 response.getReservationNumber());
         isNewMessageExpected = false;
     }
 
+    /**
+     * Processes an error message received from the agent.
+     *
+     * @param response the response message containing the error
+     */
     private void processErrorMessage(ClientMessage response) {
         String errorMessage = response.getErrorMessage();
         if (errorMessage != null && !errorMessage.isEmpty()) {
@@ -269,6 +352,12 @@ public class Client {
         isNewMessageExpected = false;
     }
 
+    /**
+     * Sends a message to the agent.
+     *
+     * @param requestMessage the message to send
+     * @throws IOException if an error occurs during publishing
+     */
     private void sendMessageToAgent(ClientMessage requestMessage) throws IOException {
         String message = objectMapper.writeValueAsString(requestMessage);
         channel.basicPublish(
@@ -278,6 +367,14 @@ public class Client {
         );
     }
 
+    /**
+     * Displays a menu and gets the user's choice.
+     *
+     * @param header the header message
+     * @param options the menu options
+     * @param max the maximum valid choice
+     * @return the user's choice
+     */
     private int displayMenuAndGetChoice(String header, String[] options, int max) {
         if (header != null) {
             System.out.println(header);
@@ -289,6 +386,12 @@ public class Client {
         return readIntInput(max);
     }
 
+    /**
+     * Reads an integer input from the user.
+     *
+     * @param max the maximum valid number
+     * @return the integer input
+     */
     private int readIntInput(int max) {
         int choice;
         while (true) {
@@ -308,24 +411,12 @@ public class Client {
         return choice;
     }
 
-    private int readIntInput(String prompt, int min, int max) {
-        int choice;
-        while (true) {
-            try {
-                System.out.print(prompt);
-                choice = Integer.parseInt(scanner.nextLine());
-                if (choice >= min && choice <= max) {
-                    break;
-                } else {
-                    System.out.printf("Please enter a number between %d and %d.%n", min, max);
-                }
-            } catch (NumberFormatException e) {
-                System.out.println("Invalid input. Please enter a number.");
-            }
-        }
-        return choice;
-    }
-
+    /**
+     * Gets a valid building name from the user.
+     *
+     * @param buildings the map of available buildings and rooms
+     * @return the valid building name
+     */
     private String getValidBuilding(Map<String, ArrayList<Integer>> buildings) {
         String building;
         while (true) {
@@ -340,6 +431,13 @@ public class Client {
         return building;
     }
 
+    /**
+     * Gets a list of valid room numbers from the user.
+     *
+     * @param availableRooms the list of available rooms in the building
+     * @param building the building name
+     * @return the list of valid room numbers
+     */
     private List<Integer> getValidRooms(ArrayList<Integer> availableRooms, String building) {
         List<Integer> rooms = new ArrayList<>();
         while (true) {
