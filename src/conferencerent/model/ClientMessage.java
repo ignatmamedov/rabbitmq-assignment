@@ -12,27 +12,16 @@ public class ClientMessage {
     private String clientId;
     private MessageType type;
     @JsonProperty("buildings")
-    private Map<String, ArrayList<Integer>> buildings;
+    private Map<String, ArrayList<Integer>> buildings = new HashMap<>();
     private String reservationNumber;
-
     private String errorMessage;
 
-    public String getErrorMessage() {
-        return errorMessage;
-    }
-
-    public void setErrorMessage(String errorMessage) {
-        this.errorMessage = errorMessage;
-    }
-
     public ClientMessage() {
-        this.buildings = new HashMap<>();
     }
 
     public ClientMessage(String clientId, MessageType type) {
         this.clientId = clientId;
         this.type = type;
-        this.buildings = new HashMap<>();
     }
 
     public MessageType getType() {
@@ -43,24 +32,24 @@ public class ClientMessage {
         this.type = type;
     }
 
-    public String getClientId(){
+    public String getClientId() {
         return clientId;
-    }
-
-    public ArrayList<Integer> getRooms(String building) {
-        return this.buildings.get(building);
     }
 
     public Map<String, ArrayList<Integer>> getBuildings() {
         return buildings;
     }
 
-    public void setBuildings(Map<String, ArrayList<Integer>> buildings){
+    public void setBuildings(Map<String, ArrayList<Integer>> buildings) {
         this.buildings = buildings;
     }
 
     public ArrayList<String> getBuildingNames() {
         return new ArrayList<>(buildings.keySet());
+    }
+
+    public ArrayList<Integer> getRooms(String building) {
+        return buildings.get(building);
     }
 
     public String getReservationNumber() {
@@ -69,5 +58,13 @@ public class ClientMessage {
 
     public void setReservationNumber(String reservationNumber) {
         this.reservationNumber = reservationNumber;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
     }
 }

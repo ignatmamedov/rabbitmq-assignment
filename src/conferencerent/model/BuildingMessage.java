@@ -8,12 +8,9 @@ import java.util.List;
 public class BuildingMessage {
     private MessageType type;
     private String buildingName;
+    private String errorMessage;
     private List<Integer> availableRooms;
     private List<Integer> requestedRooms;
-    private boolean success;
-    private String errorMessage;
-
-    public BuildingMessage(){}
 
     public MessageType getType() {
         return type;
@@ -45,10 +42,6 @@ public class BuildingMessage {
 
     public void setRequestedRooms(List<Integer> requestedRooms) {
         this.requestedRooms = requestedRooms;
-    }
-
-    public boolean isSuccess() {
-        return success;
     }
 
     public String getErrorMessage() {

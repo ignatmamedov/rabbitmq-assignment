@@ -12,7 +12,6 @@ import java.util.*;
 public class Building {
     private static final String EXCHANGE_DIRECT = "direct_exchange";
     private static final String EXCHANGE_FANOUT = "building_announce_exchange";
-
     private final String buildingName;
     private final Set<Integer> availableRooms;
     private Channel channel;
@@ -24,91 +23,83 @@ public class Building {
     }
 
     public static void main(String[] args) throws Exception {
-        new Building("Building A", new HashSet<>(Arrays.asList(101, 102, 103))).run();
-        new Building("Building B", new HashSet<>(Arrays.asList(201, 202, 203))).run();
-        new Building("Building C", new HashSet<>(Arrays.asList(301, 302, 303))).run();
+        List<Building> buildings = Arrays.asList(
+                new Building("Building A", Set.of(101, 102, 103)),
+                new Building("Building B", Set.of(201, 202, 203)),
+                new Building("Building C", Set.of(301, 302, 303))
+        );
+        for (Building building : buildings) {
+            new Thread(() -> {
+                try {
+                    building.run();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }).start();
+        }
     }
 
     public void run() throws Exception {
+        setupConnection();
+        announceBuilding();
+        listenForAgentRequests();
+    }
+
+    private void setupConnection() throws Exception {
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost("localhost");
         Connection connection = factory.newConnection();
         channel = connection.createChannel();
-
         channel.exchangeDeclare(EXCHANGE_DIRECT, BuiltinExchangeType.DIRECT);
         channel.exchangeDeclare(EXCHANGE_FANOUT, BuiltinExchangeType.FANOUT);
-
         String buildingQueue = "building_queue_" + buildingName;
         channel.queueDeclare(buildingQueue, false, false, false, null);
         channel.queueBind(buildingQueue, EXCHANGE_DIRECT, buildingName);
         channel.queueBind(buildingQueue, EXCHANGE_FANOUT, buildingName);
-
-        announceBuilding();
-        listenForAgentRequests(buildingQueue);
-
-
     }
 
     private void announceBuilding() throws IOException {
-        configureBuildingMessage();
-
-        System.out.println("Building " + buildingName + " announced itself.");
+        sendStatusToAllAgents();
     }
 
-    private void configureBuildingMessage() throws IOException {
-        BuildingMessage announcement = new BuildingMessage();
-        announcement.setType(MessageType.BUILDING_STATUS);
-        announcement.setBuildingName(buildingName);
-        announcement.setAvailableRooms(new ArrayList<>(availableRooms));
-
-        String message = objectMapper.writeValueAsString(announcement);
-        channel.basicPublish(EXCHANGE_FANOUT, "", null, message.getBytes(StandardCharsets.UTF_8));
+    private void listenForAgentRequests() throws IOException {
+        String buildingQueue = "building_queue_" + buildingName;
+        channel.basicConsume(buildingQueue, true, this::handleAgentRequest, consumerTag -> {});
     }
 
-    private void listenForAgentRequests(String queueName) throws IOException {
-        channel.basicConsume(queueName, true, (consumerTag, delivery) -> {
-            String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            try {
-                BuildingMessage message = objectMapper.readValue(jsonMessage, BuildingMessage.class);
-                handleAgentRequest(message);
-            } catch (Exception e) {
-                e.printStackTrace();
+    private void handleAgentRequest(String consumerTag, Delivery delivery) {
+        String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
+        try {
+            BuildingMessage message = objectMapper.readValue(jsonMessage, BuildingMessage.class);
+            switch (message.getType()) {
+                case REQUEST_BUILDING_STATUS -> sendStatusToAllAgents();
+                case BOOK -> processBookingRequest(message);
+                case CANCEL -> processCancellationRequest(message);
             }
-        }, consumerTag -> {});
-    }
-
-    private void handleAgentRequest(BuildingMessage message) throws IOException {
-        System.out.println("Processing request of type: " + message.getType());
-        switch (message.getType()) {
-            case REQUEST_BUILDING_STATUS -> sendStatusToAllAgents();
-            case BOOK -> processBookingRequest(message);
-            case CANCEL -> processCancellationRequest(message);
-            case ERROR -> System.out.println("Error received: " + message.getErrorMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
     private void sendStatusToAllAgents() throws IOException {
-        configureBuildingMessage();
-
-        System.out.println("Building " + buildingName + " sent status to all agents.");
+        BuildingMessage statusMessage = new BuildingMessage();
+        statusMessage.setType(MessageType.BUILDING_STATUS);
+        statusMessage.setBuildingName(buildingName);
+        statusMessage.setAvailableRooms(new ArrayList<>(availableRooms));
+        String message = objectMapper.writeValueAsString(statusMessage);
+        channel.basicPublish(EXCHANGE_FANOUT, "", null, message.getBytes(StandardCharsets.UTF_8));
     }
 
     private void processBookingRequest(BuildingMessage request) throws IOException {
         List<Integer> requestedRooms = request.getRequestedRooms();
-        boolean success = availableRooms.containsAll(requestedRooms);
-
-        if (success) {
-            requestedRooms.forEach(availableRooms::remove);
+        if (availableRooms.containsAll(requestedRooms)) {
+            availableRooms.removeAll(requestedRooms);
         }
-
-        System.out.println("Updated room availability after booking: " + availableRooms);
-
         sendStatusToAllAgents();
     }
 
     private void processCancellationRequest(BuildingMessage request) throws IOException {
         availableRooms.addAll(request.getRequestedRooms());
-        System.out.println("Updated room availability after cancellation: " + availableRooms);
         sendStatusToAllAgents();
     }
 }

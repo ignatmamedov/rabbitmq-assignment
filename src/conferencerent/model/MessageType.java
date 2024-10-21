@@ -10,4 +10,3 @@ public enum MessageType {
     ERROR,
     REQUEST_BUILDING_STATUS
 }
-

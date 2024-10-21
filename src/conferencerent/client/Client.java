@@ -74,7 +74,9 @@ public class Client {
                     "2. Request your reservations",
                     "3. Exit"
             };
-            int choice = displayMenuAndGetChoice("Conference Room Booking System", mainMenuOptions, 3);
+            int choice = displayMenuAndGetChoice(
+                    "Conference Room Booking System", mainMenuOptions, 3
+            );
 
             switch (choice) {
                 case 1 -> requestListOfBuildings();
@@ -237,7 +239,9 @@ public class Client {
                 if (reservationSet.contains(reservationToCancel)) {
                     break;
                 } else {
-                    System.out.println("Invalid reservation number. Please enter a valid reservation confirmation number.");
+                    System.out.println(
+                            "Invalid reservation number. Please enter a valid reservation confirmation number."
+                    );
                 }
             }
 
@@ -267,7 +271,11 @@ public class Client {
 
     private void sendMessageToAgent(ClientMessage requestMessage) throws IOException {
         String message = objectMapper.writeValueAsString(requestMessage);
-        channel.basicPublish(EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes(StandardCharsets.UTF_8));
+        channel.basicPublish(
+                EXCHANGE_CLIENT, "client_to_agent", null, message.getBytes(
+                        StandardCharsets.UTF_8
+                )
+        );
     }
 
     private int displayMenuAndGetChoice(String header, String[] options, int max) {
@@ -361,7 +369,12 @@ public class Client {
             if (allValid && !rooms.isEmpty()) {
                 break;
             } else {
-                System.out.println("Please enter valid room numbers from the available rooms in " + building + ": " + availableRooms);
+                System.out.println(
+                        "Please enter valid room numbers from the available rooms in "
+                                + building
+                                + ": "
+                                + availableRooms
+                );
             }
         }
         return rooms;
