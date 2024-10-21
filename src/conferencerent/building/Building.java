@@ -22,7 +22,7 @@ public class Building {
         this.availableRooms = Collections.synchronizedSet(new HashSet<>(rooms));
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args){
         List<Building> buildings = Arrays.asList(
                 new Building("Building A", Set.of(101, 102, 103)),
                 new Building("Building B", Set.of(201, 202, 203)),
@@ -93,7 +93,7 @@ public class Building {
     private void processBookingRequest(BuildingMessage request) throws IOException {
         List<Integer> requestedRooms = request.getRequestedRooms();
         if (availableRooms.containsAll(requestedRooms)) {
-            availableRooms.removeAll(requestedRooms);
+            requestedRooms.forEach(availableRooms::remove);
         }
         sendStatusToAllAgents();
     }

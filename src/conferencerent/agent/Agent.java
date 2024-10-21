@@ -205,7 +205,7 @@ public class Agent {
         rooms.forEach((building, roomList) -> {
             Set<Integer> available = availableRooms.get(building);
             if (available != null) {
-                available.removeAll(roomList);
+                roomList.forEach(available::remove);
             }
         });
     }
