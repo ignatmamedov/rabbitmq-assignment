@@ -16,10 +16,11 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Agent {
-    private static final int TIMEOUT = 1000;
+    private static final int TIMEOUT = 100000;
     private static final String EXCHANGE_CLIENT = "client_exchange";
     private static final String EXCHANGE_DIRECT = "direct_exchange";
     private static final String EXCHANGE_FANOUT = "building_announce_exchange";
+    private static final String EXCHANGE_REPLICATION = "replication_exchange";
     private static final String CLIENT_AGENT_QUEUE = "client_to_agent_queue";
     private static final String AGENT_QUEUE_NAME = "agent_to_building_queue_" + UUID.randomUUID();
     private static final Map<String, List<ClientMessage>> reservations = new ConcurrentHashMap<>();
@@ -47,6 +48,7 @@ public class Agent {
 
         channel.exchangeDeclare(EXCHANGE_CLIENT, BuiltinExchangeType.DIRECT);
         channel.exchangeDeclare(EXCHANGE_FANOUT, BuiltinExchangeType.FANOUT);
+        channel.exchangeDeclare(EXCHANGE_REPLICATION, BuiltinExchangeType.FANOUT);
 
         channel.queueDeclare(CLIENT_AGENT_QUEUE, false, false, false, null);
         channel.queueBind(CLIENT_AGENT_QUEUE, EXCHANGE_CLIENT, "client_to_agent");
@@ -55,6 +57,8 @@ public class Agent {
 
         channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_DIRECT, "agent_building_interaction");
         channel.queueBind(AGENT_QUEUE_NAME, EXCHANGE_FANOUT, "");
+
+        listenForReplicationMessages();
 
         requestBuildingStatusFromAll();
 
@@ -202,7 +206,17 @@ public class Agent {
         responseMessage.setReservationNumber(reservationNumber);
         responseMessage.setBuildings(requestMessage.getBuildings());
         sendResponse(clientId, responseMessage);
+
+        replicateUnconfirmedBooking(requestMessage);
     }
+
+    private void replicateUnconfirmedBooking(ClientMessage bookingMessage) throws IOException {
+        bookingMessage.setType(MessageType.BOOK);
+        String message = objectMapper.writeValueAsString(bookingMessage);
+        channel.basicPublish(EXCHANGE_REPLICATION, "", null, message.getBytes(StandardCharsets.UTF_8));
+        System.out.println("Replicated unconfirmed booking: " + bookingMessage.getReservationNumber());
+    }
+
 
     private boolean isAllRoomsAvailable(Map<String, ArrayList<Integer>> requestedRooms, boolean allRoomsAvailable) {
         for (Map.Entry<String, ArrayList<Integer>> entry : requestedRooms.entrySet()) {
@@ -248,6 +262,10 @@ public class Agent {
                 ClientMessage responseMessage = new ClientMessage(clientId, MessageType.CONFIRM);
                 responseMessage.setReservationNumber(reservationNumber);
                 sendResponse(clientId, responseMessage);
+
+                unconfirmed.setType(MessageType.CONFIRM);
+                replicateBooking(unconfirmed);
+
             } else {
                 ClientMessage errorMessage = new ClientMessage(clientId, MessageType.ERROR);
                 errorMessage.setErrorMessage("Requested rooms are no longer available.");
@@ -266,13 +284,10 @@ public class Agent {
         List<ClientMessage> clientReservations = reservations.get(clientId);
 
         if (clientReservations != null) {
-            ClientMessage toRemove = null;
-            for (ClientMessage reservation : clientReservations) {
-                if (reservation.getReservationNumber().equals(reservationNumber)) {
-                    toRemove = reservation;
-                    break;
-                }
-            }
+            ClientMessage toRemove = clientReservations.stream()
+                    .filter(reservation -> reservation.getReservationNumber().equals(reservationNumber))
+                    .findFirst()
+                    .orElse(null);
 
             if (toRemove != null) {
                 Map<String, ArrayList<Integer>> canceledRooms = toRemove.getBuildings();
@@ -285,6 +300,9 @@ public class Agent {
                 clientReservations.remove(toRemove);
 
                 sendCancelMessageToBuilding(toRemove);
+
+                requestMessage.setType(MessageType.CANCEL);
+                replicateBooking(requestMessage);
 
                 ClientMessage responseMessage = new ClientMessage(clientId, MessageType.CANCEL);
                 responseMessage.setReservationNumber(reservationNumber);
@@ -350,7 +368,8 @@ public class Agent {
         String message = objectMapper.writeValueAsString(responseMessage);
         channel.basicPublish(EXCHANGE_CLIENT, clientId, null, message.getBytes(StandardCharsets.UTF_8));
     }
-    private void removeInactiveBuildings(){
+
+    private void removeInactiveBuildings() {
         new Thread(() -> {
             while (true) {
                 try {
@@ -386,6 +405,53 @@ public class Agent {
         channel.basicPublish(EXCHANGE_DIRECT, buildingName, null, message.getBytes(StandardCharsets.UTF_8));
 
         System.out.println("Sent REQUEST_BUILDING_STATUS to building: " + buildingName);
+    }
+
+    private void replicateBooking(ClientMessage bookingMessage) throws IOException {
+        String message = objectMapper.writeValueAsString(bookingMessage);
+        channel.basicPublish(EXCHANGE_REPLICATION, "", null, message.getBytes(StandardCharsets.UTF_8));
+        System.out.println("Replicated confirmed booking: " + bookingMessage.getReservationNumber());
+    }
+
+    private void listenForReplicationMessages() throws IOException {
+        String replicationQueue = "replication_queue_" + UUID.randomUUID();
+        channel.queueDeclare(replicationQueue, false, false, true, null);
+        channel.queueBind(replicationQueue, EXCHANGE_REPLICATION, "");
+
+        channel.basicConsume(replicationQueue, true, (consumerTag, delivery) -> {
+            String jsonMessage = new String(delivery.getBody(), StandardCharsets.UTF_8);
+            ClientMessage replicationMessage;
+            try {
+                replicationMessage = objectMapper.readValue(jsonMessage, ClientMessage.class);
+            } catch (Exception e) {
+                e.printStackTrace();
+                return;
+            }
+
+            if (replicationMessage.getType() == MessageType.BOOK) {
+                unconfirmedReservations.put(replicationMessage.getReservationNumber(), replicationMessage);
+                System.out.println("Replicated unconfirmed reservation added: " + replicationMessage.getReservationNumber());
+            } else if (replicationMessage.getType() == MessageType.CONFIRM) {
+                List<ClientMessage> clientReservations = reservations.computeIfAbsent(replicationMessage.getClientId(), k -> Collections.synchronizedList(new ArrayList<>()));
+
+                boolean alreadyExists = clientReservations.stream()
+                        .anyMatch(existingReservation -> existingReservation.getReservationNumber().equals(replicationMessage.getReservationNumber()));
+
+                if (!alreadyExists) {
+                    clientReservations.add(replicationMessage);
+                    System.out.println("Replicated confirmed reservation added: " + replicationMessage.getReservationNumber());
+                } else {
+                    System.out.println("Reservation already exists: " + replicationMessage.getReservationNumber());
+                }
+            } else if (replicationMessage.getType() == MessageType.CANCEL) {
+                List<ClientMessage> clientReservations = reservations.get(replicationMessage.getClientId());
+                if (clientReservations != null) {
+                    clientReservations.removeIf(reservation -> reservation.getReservationNumber().equals(replicationMessage.getReservationNumber()));
+                    System.out.println("Replicated cancellation processed for reservation: " + replicationMessage.getReservationNumber());
+                }
+                unconfirmedReservations.remove(replicationMessage.getReservationNumber());
+            }
+        }, consumerTag -> {});
     }
 
 }

@@ -39,6 +39,10 @@ public class ClientMessage {
         return type;
     }
 
+    public void setType(MessageType type) {
+        this.type = type;
+    }
+
     public String getClientId(){
         return clientId;
     }
